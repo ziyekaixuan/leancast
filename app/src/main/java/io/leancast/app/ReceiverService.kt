@@ -138,9 +138,14 @@ class ReceiverService : Service() {
                 location = "http://${lanIp ?: "0.0.0.0"}:${server.boundPort}/desc.xml",
                 serverToken = serverToken(),
             )
-            SsdpAgent(identity) { address ->
-                "http://${address.hostAddress}:${server.boundPort}/desc.xml"
-            }.also { it.start() }
+            // A trailing lambda would bind to the constructor's LAST parameter
+            // (responder), not locationFor: pass it by name.
+            SsdpAgent(
+                identity = identity,
+                locationFor = { address ->
+                    "http://${address.hostAddress}:${server.boundPort}/desc.xml"
+                },
+            ).also { it.start() }
         }.onFailure { Log.w(TAG, "SSDP start failed: ${it.javaClass.simpleName}") }
             .getOrNull()
 
