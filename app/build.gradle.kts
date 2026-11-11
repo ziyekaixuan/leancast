@@ -16,7 +16,9 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "io.leancast"
+        // Fork: different applicationId from the upstream io.leancast so both
+        // apps can be installed side by side on one device.
+        applicationId = "io.leancast.fork"
         minSdk = 21
         targetSdk = 28
         versionCode = ciVersionCode ?: 10
