@@ -296,7 +296,9 @@ class ReceiverService : Service() {
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this).apply {
-                priority = Notification.PRIORITY_HIGH
+                // Builder has setPriority() but no getPriority(), so Kotlin
+                // cannot use property syntax here — call the setter directly.
+                setPriority(Notification.PRIORITY_HIGH)
             }
         }
         val title = if (::session.isInitialized) {
