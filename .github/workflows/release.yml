@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.2.8)"
+        required: true
+        default: "0.2.8"
 
 permissions:
   contents: write
@@ -30,7 +35,11 @@ jobs:
 
       - name: Resolve version from tag
         run: |
-          VERSION_NAME="${GITHUB_REF_NAME#v}"
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION_NAME="${{ inputs.version }}"
+          else
+            VERSION_NAME="${GITHUB_REF_NAME#v}"
+          fi
           VERSION_CODE="${GITHUB_RUN_NUMBER}"
           echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
@@ -50,5 +59,6 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.VERSION_NAME }}
           generate_release_notes: true
           files: LeanCast-*.apk
