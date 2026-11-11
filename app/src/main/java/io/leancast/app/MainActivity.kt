@@ -91,6 +91,7 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(root)
         ReceiverService.start(this)
+        WakeJobService.schedule(this)
     }
 
     override fun onResume() {

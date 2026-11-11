@@ -70,6 +70,9 @@ class ReceiverService : Service() {
         events = SubscriptionRegistry()
         startNetworkStack()
         registerNetworkReceiver()
+        // Brings the receiver back once the device has a network again, after
+        // the system stopped it: a persisted job, surviving reboots.
+        WakeJobService.schedule(this)
         scheduleBindRetry()
         isRunning = true
     }
@@ -124,19 +127,27 @@ class ReceiverService : Service() {
         CastBus.endpoint = "${lanIp ?: "0.0.0.0"}:${server.boundPort}"
 
         // BOOT_COMPLETED fires before the network is up: with no LAN address
-        // yet there is nothing valid to advertise, so skip SSDP entirely
-        // instead of announcing LOCATION http://0.0.0.0:… and joining the
-        // multicast group on the wrong interface. The network broadcast (or
-        // the bind-retry poll below) rebinds once an address exists.
-        ssdp = if (lanIp != null) {
+        // yet there is nothing valid to advertise as the default LOCATION,
+        // but the agent itself is still started — it joins the multicast
+        // group on every interface that exists, announces per interface as
+        // they appear, and the network broadcast (or the bind-retry poll, or
+        // the persisted wake job) rebinds once an address exists.
+        ssdp = runCatching {
             val identity = SsdpIdentity(
                 uuid = settings.uuid(),
-                location = "http://${lanIp}:${server.boundPort}/desc.xml",
+                location = "http://${lanIp ?: "0.0.0.0"}:${server.boundPort}/desc.xml",
                 serverToken = serverToken(),
             )
-            // The multicast lock is only useful once Wi-Fi is actually up:
-            // acquiring it while the radio is still down can leave the
-            // driver filtering multicast even after the network connects.
+            SsdpAgent(identity) { address ->
+                "http://${address.hostAddress}:${server.boundPort}/desc.xml"
+            }.also { it.start() }
+        }.onFailure { Log.w(TAG, "SSDP start failed: ${it.javaClass.simpleName}") }
+            .getOrNull()
+
+        // The multicast lock is only useful once Wi-Fi is actually up:
+        // acquiring it while the radio is still down can leave the
+        // driver filtering multicast even after the network connects.
+        if (lanIp != null) {
             acquireMulticastLock()
             Log.i(
                 TAG,
@@ -144,12 +155,8 @@ class ReceiverService : Service() {
                     "location=http://$lanIp:${server.boundPort}/desc.xml " +
                     "mcastHeld=${multicastLock?.isHeld}",
             )
-            runCatching { SsdpAgent(identity).also { it.start(Net.lanInterface()) } }
-                .onFailure { Log.w(TAG, "SSDP start failed: ${it.javaClass.simpleName}") }
-                .getOrNull()
         } else {
-            Log.i(TAG, "startNetworkStack: no LAN IP yet, SSDP skipped")
-            null
+            Log.i(TAG, "startNetworkStack: no LAN IP yet, SSDP announcing on interfaces as they appear")
         }
     }
 

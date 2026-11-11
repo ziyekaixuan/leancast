@@ -41,7 +41,8 @@
              implicit-broadcast limits). Connectivity / Wi-Fi changes are NOT
              declared here: since Android 7.0/8.0 they are not delivered to
              manifest receivers, so ReceiverService registers
-             NetworkChangeReceiver dynamically instead. -->
+             NetworkChangeReceiver dynamically instead. TIME_SET /
+             TIMEZONE_CHANGED cover firmwares that sleep rather than boot. -->
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
@@ -49,7 +50,17 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
         </receiver>
+
+        <!-- Brings the receiver back once there is a network, after the system
+             stopped it: a persisted JobScheduler job, surviving reboots. -->
+        <service
+            android:name=".WakeJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 </manifest>

@@ -6,140 +6,190 @@ import io.leancast.domain.ssdp.SsdpInbound
 import io.leancast.domain.ssdp.SsdpMessageParser
 import io.leancast.domain.ssdp.SsdpResponder
 import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.MulticastSocket
 import java.net.NetworkInterface
+import java.net.SocketException
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
 /**
- * SSDP network agent: joins the multicast group, answers M-SEARCHes with
- * MX-paced unicast replies, and multicasts alive/byebye notifications.
+ * SSDP network agent: answers M-SEARCHes on the SSDP multicast group and
+ * announces the renderer with NOTIFY ssdp:alive (repeated) and ssdp:byebye
+ * on stop. Modelled on castbay's SsdpServer:
+ *
+ * - the multicast group is joined on EVERY up, multicast-capable interface,
+ *   not a single "preferred" one: on multi-interface TVs (Wi-Fi + Wi-Fi
+ *   Direct + Ethernet) one pinned interface can be the wrong one, leaving
+ *   the receiver undiscoverable until the app is opened once;
+ * - announcements are re-evaluated per interface on every round (a burst,
+ *   then every minute), each carrying that interface's own LOCATION;
+ * - M-SEARCH replies carry the address the route to the searcher uses, so
+ *   the LOCATION is always reachable from the phone asking;
+ * - if port 1900 is already taken (the TV's own DLNA service), searches go
+ *   unanswered but the announcements still go out.
+ *
+ * TVs often run their own DLNA service on port 1900. Sockets that all allow
+ * address reuse share it; if one doesn't, [start] still announces the
+ * renderer, but searches go unanswered and control points only find it from
+ * the periodic announcements.
  */
 class SsdpAgent(
     private val identity: SsdpIdentity,
+    private val locationFor: (InetAddress) -> String,
     private val responder: SsdpResponder = SsdpResponder(identity),
 ) {
     @Volatile private var running = false
-    private var socket: MulticastSocket? = null
+    private var listener: MulticastSocket? = null
+    private var sender: MulticastSocket? = null
     private var listenThread: Thread? = null
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
-    /**
-     * Joins the multicast group and starts listening. [networkInterface] pins
-     * the join (and outgoing packets) to the LAN interface: without it the
-     * socket joins on whatever the system picks at boot — with the network
-     * still down that is often loopback, so M-SEARCHes on the real LAN never
-     * arrive and the receiver stays undiscoverable until the app is opened.
-     */
-    fun start(networkInterface: NetworkInterface? = null) {
+    /** Whether M-SEARCH requests can be received (port 1900 could be bound). */
+    var answersSearches = false
+        private set
+
+    fun start() {
         if (running) return
         running = true
-        val group = InetAddress.getByName(GROUP)
-        val sock = MulticastSocket(null)
-        try {
-            sock.apply {
+
+        sender = MulticastSocket().apply { timeToLive = 4 }
+
+        answersSearches = try {
+            val socket = MulticastSocket(null).apply {
                 reuseAddress = true
                 bind(InetSocketAddress(PORT))
-                if (networkInterface != null) {
-                    this.networkInterface = networkInterface
-                    joinGroup(InetSocketAddress(group, PORT), networkInterface)
-                } else {
-                    joinGroup(group)
-                }
             }
-        } catch (e: Exception) {
-            // Join failed (e.g. no network yet): don't leave a half-open
-            // socket behind — the caller retries once the network is up.
-            running = false
-            runCatching { sock.close() }
-            throw e
-        }
-        socket = sock
-        Log.i(TAG, "SSDP listening on ${networkInterface?.name ?: "default"}:1900, location=${identity.location}")
-
-        listenThread = Thread {
-            val buf = ByteArray(2048)
-            while (running) {
-                try {
-                    val packet = DatagramPacket(buf, buf.size)
-                    sock.receive(packet)
-                    if (packet.address.isLoopbackAddress) continue
-                    val copy = packet.data.copyOf(packet.length)
-                    when (val msg = SsdpMessageParser.parse(copy, packet.address, packet.port)) {
-                        is SsdpInbound.MSearch -> {
-                            Log.d(TAG, "M-SEARCH from ${packet.address.hostAddress}:${packet.port}")
-                            scheduleResponses(msg, sock)
-                        }
-                        is SsdpInbound.Ignored -> Unit
-                    }
-                } catch (_: Exception) {
-                    if (!running) break
-                }
+            val group = InetSocketAddress(InetAddress.getByName(GROUP), PORT)
+            interfaces().forEach { (network, _) ->
+                runCatching { socket.joinGroup(group, network) }
+                    .onFailure { Log.w(TAG, "Could not join SSDP group on ${network.name}", it) }
             }
-        }.apply {
-            name = "ssdp-listener"
-            isDaemon = true
-            start()
+            listener = socket
+            listenThread = Thread({ listen(socket) }, "ssdp-listener").apply {
+                isDaemon = true
+                start()
+            }
+            true
+        } catch (error: SocketException) {
+            Log.w(TAG, "SSDP port $PORT is taken by another app; relying on announcements only", error)
+            false
         }
 
-        // UPnP recommends several announcements at startup.
+        Log.i(TAG, "SSDP started (answers searches: $answersSearches)")
+
+        // A quick burst so control points already searching see us, then a steady pace.
         repeat(3) { burst ->
-            scheduler.schedule({
-                multicast(responder.aliveMessages(), sock, group)
-            }, burst * 350L, TimeUnit.MILLISECONDS)
+            scheduler.schedule({ announceAlive() }, burst * 1000L, TimeUnit.MILLISECONDS)
         }
-        // Periodic refresh at max-age/2.
         scheduler.scheduleAtFixedRate(
-            { multicast(responder.aliveMessages(), sock, group) },
-            (identity.maxAgeSeconds / 2).toLong(),
-            (identity.maxAgeSeconds / 2).toLong(),
-            TimeUnit.SECONDS,
+            { announceAlive() },
+            ANNOUNCE_INTERVAL_MS,
+            ANNOUNCE_INTERVAL_MS,
+            TimeUnit.MILLISECONDS,
         )
     }
 
     fun stop() {
         if (!running) return
         running = false
-        socket?.let { sock ->
-            runCatching {
-                val group = InetAddress.getByName(GROUP)
-                multicast(responder.byebyeMessages(), sock, group)
-            }
-        }
+        runCatching { announceByebye() }
         scheduler.shutdownNow()
         listenThread?.interrupt()
-        socket?.close()
-        socket = null
+        runCatching { listener?.close() }
+        runCatching { sender?.close() }
+        listener = null
+        sender = null
     }
 
-    private fun scheduleResponses(msg: SsdpInbound.MSearch, sock: MulticastSocket) {
-        val responses = responder.responsesFor(msg)
+    private fun listen(socket: MulticastSocket) {
+        val buf = ByteArray(4096)
+        while (running) {
+            try {
+                val packet = DatagramPacket(buf, buf.size)
+                socket.receive(packet)
+                if (packet.address.isLoopbackAddress) continue
+                val copy = packet.data.copyOf(packet.length)
+                when (val msg = SsdpMessageParser.parse(copy, packet.address, packet.port)) {
+                    is SsdpInbound.MSearch -> {
+                        Log.d(TAG, "M-SEARCH ${msg.st} from ${packet.address.hostAddress}")
+                        scheduleResponses(msg)
+                    }
+                    is SsdpInbound.Ignored -> Unit
+                }
+            } catch (_: Exception) {
+                if (!running) break
+            }
+        }
+    }
+
+    private fun scheduleResponses(msg: SsdpInbound.MSearch) {
+        // Answer with the address the route to the searcher uses: the reply's
+        // LOCATION is then reachable from the phone asking, whichever
+        // interface it arrived on.
+        val location = localAddressFor(msg.from)?.let(locationFor) ?: identity.location
+        val responses = responder.responsesFor(msg, location)
         if (responses.isEmpty()) return
         val delayMs = responder.responseDelayMs(msg.mxSeconds)
         scheduler.schedule({
-            responses.forEach { bytes ->
-                runCatching {
+            runCatching {
+                DatagramSocket().use { socket ->
                     val target = InetSocketAddress(msg.from, msg.fromPort)
-                    sock.send(DatagramPacket(bytes, bytes.size, target))
+                    responses.forEach { bytes ->
+                        socket.send(DatagramPacket(bytes, bytes.size, target))
+                    }
                 }
-            }
+            }.onFailure { Log.w(TAG, "Could not answer M-SEARCH from ${msg.from.hostAddress}", it) }
         }, delayMs, TimeUnit.MILLISECONDS)
     }
 
-    private fun multicast(messages: List<ByteArray>, sock: MulticastSocket, group: InetAddress) {
-        messages.forEach { bytes ->
-            runCatching {
-                sock.send(DatagramPacket(bytes, bytes.size, group, PORT))
-            }
+    private fun announceAlive() {
+        interfaces().forEach { (network, address) ->
+            announceOn(network) { responder.aliveMessages(locationFor(address)) }
         }
     }
+
+    private fun announceByebye() {
+        interfaces().forEach { (network, _) ->
+            announceOn(network) { responder.byebyeMessages() }
+        }
+    }
+
+    private fun announceOn(network: NetworkInterface, messages: () -> List<ByteArray>) {
+        val socket = sender ?: return
+        val group = InetSocketAddress(InetAddress.getByName(GROUP), PORT)
+        runCatching {
+            socket.networkInterface = network
+            messages().forEach { bytes ->
+                socket.send(DatagramPacket(bytes, bytes.size, group))
+            }
+        }.onFailure { Log.w(TAG, "SSDP announcement failed on ${network.name}", it) }
+    }
+
+    /** Our address on the network that reaches [remote]. */
+    private fun localAddressFor(remote: InetAddress): InetAddress? = runCatching {
+        DatagramSocket().use { socket ->
+            socket.connect(remote, PORT)
+            socket.localAddress.takeUnless { it.isAnyLocalAddress }
+        }
+    }.getOrNull()
+
+    /** Up, multicast-capable interfaces with an IPv4 address (SSDP here is IPv4 only). */
+    private fun interfaces(): List<Pair<NetworkInterface, InetAddress>> =
+        runCatching { NetworkInterface.getNetworkInterfaces().toList() }.getOrDefault(emptyList())
+            .filter { runCatching { it.isUp && !it.isLoopback && it.supportsMulticast() }.getOrDefault(false) }
+            .mapNotNull { network ->
+                network.inetAddresses.toList().firstOrNull { it is Inet4Address }?.let { network to it }
+            }
 
     companion object {
         private const val TAG = "LeanCast"
         const val GROUP = "239.255.255.250"
         const val PORT = 1900
+        private const val ANNOUNCE_INTERVAL_MS = 60_000L
     }
 }

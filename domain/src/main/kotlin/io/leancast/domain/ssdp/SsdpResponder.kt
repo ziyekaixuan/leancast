@@ -27,19 +27,24 @@ class SsdpResponder(
     private val clockMs: () -> Long = System::currentTimeMillis,
 ) {
 
-    /** All search responses owed for an inbound M-SEARCH (empty when unsupported). */
-    fun responsesFor(search: SsdpInbound.MSearch): List<ByteArray> {
+    /**
+     * All search responses owed for an inbound M-SEARCH (empty when unsupported).
+     * [location] overrides the identity's LOCATION: callers that know which
+     * network reaches the searcher (e.g. the address the route to it uses)
+     * pass it so the reply is always reachable from the control point.
+     */
+    fun responsesFor(search: SsdpInbound.MSearch, location: String? = null): List<ByteArray> {
         val st = search.st.trim()
         // A UDN-targeted search must be answered with the UDN itself as ST and
         // USN; senders that cached our identity look us up exactly this way.
         if (st.startsWith("uuid:", ignoreCase = true)) {
             if (!st.equals(identity.uuid, ignoreCase = true)) return emptyList()
-            return listOf(renderResponse(SsdpTarget.ROOT, stOverride = identity.uuid, usnOverride = identity.uuid))
+            return listOf(renderResponse(SsdpTarget.ROOT, stOverride = identity.uuid, usnOverride = identity.uuid, location = location))
         }
-        return targetsFor(st).map { renderResponse(it) }
+        return targetsFor(st).map { renderResponse(it, location = location) }
     }
 
-    fun aliveMessages(): List<ByteArray> = SsdpTarget.entries.map { renderAlive(it) }
+    fun aliveMessages(location: String? = null): List<ByteArray> = SsdpTarget.entries.map { renderAlive(it, location) }
 
     fun byebyeMessages(): List<ByteArray> = SsdpTarget.entries.map { renderByebye(it) }
 
@@ -61,23 +66,24 @@ class SsdpResponder(
         target: SsdpTarget,
         stOverride: String? = null,
         usnOverride: String? = null,
+        location: String? = null,
     ): ByteArray = buildString {
         append("HTTP/1.1 200 OK\r\n")
         append("CACHE-CONTROL: max-age=${identity.maxAgeSeconds}\r\n")
         append("DATE: ${rfc1123()}\r\n")
         append("EXT:\r\n")
-        append("LOCATION: ${identity.location}\r\n")
+        append("LOCATION: ${location ?: identity.location}\r\n")
         append("SERVER: ${identity.serverToken}\r\n")
         append("ST: ${stOverride ?: target.nt}\r\n")
         append("USN: ${usnOverride ?: target.usn(identity.uuid)}\r\n")
         append("\r\n")
     }.toByteArray(Charsets.US_ASCII)
 
-    private fun renderAlive(target: SsdpTarget): ByteArray = buildString {
+    private fun renderAlive(target: SsdpTarget, location: String? = null): ByteArray = buildString {
         append("NOTIFY * HTTP/1.1\r\n")
         append("HOST: $SSDP_HOST\r\n")
         append("CACHE-CONTROL: max-age=${identity.maxAgeSeconds}\r\n")
-        append("LOCATION: ${identity.location}\r\n")
+        append("LOCATION: ${location ?: identity.location}\r\n")
         append("NT: ${target.nt}\r\n")
         append("NTS: ssdp:alive\r\n")
         append("SERVER: ${identity.serverToken}\r\n")
