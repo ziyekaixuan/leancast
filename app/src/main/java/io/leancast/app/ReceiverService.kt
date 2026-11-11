@@ -34,6 +34,9 @@ class ReceiverService : Service() {
     private lateinit var events: SubscriptionRegistry
     private var multicastLock: WifiManager.MulticastLock? = null
     private lateinit var audioManager: AudioManager
+    /** LAN address the SSDP LOCATION was bound to; re-checked on every start. */
+    private var boundIp: String? = null
+    private var networkReceiver: NetworkChangeReceiver? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -57,6 +60,42 @@ class ReceiverService : Service() {
         CastBus.port = playerPort
 
         events = SubscriptionRegistry()
+        startNetworkStack()
+        registerNetworkReceiver()
+        isRunning = true
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Repeated start (e.g. from NetworkChangeReceiver after a Wi-Fi
+        // reconnect): rebind SSDP when the LAN address changed, so the
+        // receiver stays discoverable on the new network. Same address
+        // means nothing to do — this also swallows broadcast bursts.
+        if (::settings.isInitialized && boundIp != Net.lanIpv4()) {
+            restartNetworkStack()
+        }
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        runCatching { networkReceiver?.let(::unregisterReceiver) }
+        networkReceiver = null
+        isRunning = false
+        stopNetworkStack()
+        events.shutdown()
+        playerPort.release()
+        CastBus.session = null
+        CastBus.port = null
+        CastBus.endpoint = ""
+        super.onDestroy()
+    }
+
+    /**
+     * (Re)binds everything that depends on the LAN address: HTTP control
+     * server, SSDP agent (its LOCATION embeds the address) and the multicast
+     * lock. The cast session and player are untouched, so an active cast
+     * survives a network rebind.
+     */
+    private fun startNetworkStack() {
         val server = ControlServer.startWithFallback(
             preferredPort = PREFERRED_PORT,
             descriptionProvider = ::rendererDescription,
@@ -68,6 +107,7 @@ class ReceiverService : Service() {
         this.server = server
 
         val lanIp = Net.lanIpv4()
+        boundIp = lanIp
         CastBus.endpoint = "${lanIp ?: "0.0.0.0"}:${server.boundPort}"
 
         val identity = SsdpIdentity(
@@ -80,18 +120,34 @@ class ReceiverService : Service() {
         acquireMulticastLock()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
-
-    override fun onDestroy() {
+    private fun stopNetworkStack() {
         ssdp?.stop()
+        ssdp = null
         server?.stop()
-        events.shutdown()
-        playerPort.release()
+        server = null
         releaseMulticastLock()
-        CastBus.session = null
-        CastBus.port = null
-        CastBus.endpoint = ""
-        super.onDestroy()
+    }
+
+    private fun restartNetworkStack() {
+        stopNetworkStack()
+        startNetworkStack()
+    }
+
+    /**
+     * Listens for connectivity / Wi-Fi changes while the service lives.
+     * These broadcasts are not delivered to manifest-registered receivers
+     * since Android 7.0/8.0, hence the dynamic registration here.
+     */
+    private fun registerNetworkReceiver() {
+        val receiver = NetworkChangeReceiver()
+        networkReceiver = receiver
+        val filter = NetworkChangeReceiver.intentFilter()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(receiver, filter)
+        }
     }
 
     private fun rendererDescription() = RendererDescription(
@@ -205,17 +261,28 @@ class ReceiverService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val PREFERRED_PORT = 49_152
 
+        /** True while the service instance is alive; read by the receivers. */
+        @Volatile
+        var isRunning = false
+            private set
+
         /**
          * Starts the receiver. Uses [Context.startForegroundService] on API 26+ so the
          * call is legal from a background context (e.g. [BootReceiver] after boot) —
          * a plain `startService` there throws `IllegalStateException` on Android 8+.
+         * On Android 12+ the system may still refuse a background start
+         * ([android.app.ForegroundServiceStartNotAllowedException]); that is
+         * swallowed here because there is nothing useful to do about it — the
+         * service will come up on the next trigger (e.g. opening the app).
          */
         fun start(context: Context) {
             val intent = Intent(context, ReceiverService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
             }
         }
 

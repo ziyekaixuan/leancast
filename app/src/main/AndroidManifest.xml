@@ -37,12 +37,18 @@
             android:name=".ReceiverService"
             android:exported="false" />
 
+        <!-- BOOT_COMPLETED stays manifest-registered (it is exempt from the
+             implicit-broadcast limits). Connectivity / Wi-Fi changes are NOT
+             declared here: since Android 7.0/8.0 they are not delivered to
+             manifest receivers, so ReceiverService registers
+             NetworkChangeReceiver dynamically instead. -->
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
     </application>
