@@ -30,12 +30,15 @@ class NetworkChangeReceiver : BroadcastReceiver() {
                 WifiManager.WIFI_STATE_UNKNOWN,
             ) != WifiManager.WIFI_STATE_ENABLED
         ) return
+        // Still connecting / no LAN address yet (DHCP lags the broadcast
+        // burst): return WITHOUT consuming the debounce slot, so the next
+        // broadcast — or the service's own bind-retry poll — can still act
+        // once the address exists.
+        if (Net.lanIpv4() == null) return
         // Wi-Fi connect fires a burst of broadcasts; act on the first only.
         val now = SystemClock.elapsedRealtime()
         if (now - lastTriggerMs < DEBOUNCE_MS) return
         lastTriggerMs = now
-        // Still connecting / no LAN address yet: the next broadcast will retry.
-        if (Net.lanIpv4() == null) return
         if (ReceiverService.isRunning || Settings(context).autostart) {
             ReceiverService.start(context)
         }

@@ -10,7 +10,9 @@ import android.content.Intent
 import android.media.AudioManager
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import io.leancast.domain.cast.CastSession
 import io.leancast.domain.cast.TransportState
 import io.leancast.domain.cast.VolumeMath
@@ -37,6 +39,8 @@ class ReceiverService : Service() {
     /** LAN address the SSDP LOCATION was bound to; re-checked on every start. */
     private var boundIp: String? = null
     private var networkReceiver: NetworkChangeReceiver? = null
+    private val bindRetryHandler = Handler(Looper.getMainLooper())
+    private var bindRetries = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -62,6 +66,7 @@ class ReceiverService : Service() {
         events = SubscriptionRegistry()
         startNetworkStack()
         registerNetworkReceiver()
+        scheduleBindRetry()
         isRunning = true
     }
 
@@ -77,6 +82,7 @@ class ReceiverService : Service() {
     }
 
     override fun onDestroy() {
+        bindRetryHandler.removeCallbacks(bindRetryTask)
         runCatching { networkReceiver?.let(::unregisterReceiver) }
         networkReceiver = null
         isRunning = false
@@ -111,12 +117,22 @@ class ReceiverService : Service() {
         boundIp = lanIp
         CastBus.endpoint = "${lanIp ?: "0.0.0.0"}:${server.boundPort}"
 
-        val identity = SsdpIdentity(
-            uuid = settings.uuid(),
-            location = "http://${lanIp ?: "0.0.0.0"}:${server.boundPort}/desc.xml",
-            serverToken = serverToken(),
-        )
-        ssdp = SsdpAgent(identity).also { it.start() }
+        // BOOT_COMPLETED fires before the network is up: with no LAN address
+        // yet there is nothing valid to advertise, so skip SSDP entirely
+        // instead of announcing LOCATION http://0.0.0.0:… and joining the
+        // multicast group on the wrong interface. The network broadcast (or
+        // the bind-retry poll below) rebinds once an address exists.
+        ssdp = if (lanIp != null) {
+            val identity = SsdpIdentity(
+                uuid = settings.uuid(),
+                location = "http://${lanIp}:${server.boundPort}/desc.xml",
+                serverToken = serverToken(),
+            )
+            runCatching { SsdpAgent(identity).also { it.start(Net.lanInterface()) } }
+                .getOrNull()
+        } else {
+            null
+        }
 
         acquireMulticastLock()
     }
@@ -132,6 +148,38 @@ class ReceiverService : Service() {
     private fun restartNetworkStack() {
         stopNetworkStack()
         startNetworkStack()
+        scheduleBindRetry()
+    }
+
+    /**
+     * Boot safety net: the network broadcasts normally trigger the rebind,
+     * but on some firmwares the burst arrives before DHCP hands out an
+     * address (and is then debounced away), leaving the receiver
+     * undiscoverable until the app is opened once. Poll until the stack is
+     * bound; the broadcasts remain the fast path.
+     */
+    private val bindRetryTask = object : Runnable {
+        override fun run() {
+            if (!isRunning) return
+            val ip = Net.lanIpv4()
+            if (ip != null && (boundIp != ip || ssdp == null)) {
+                // restartNetworkStack() re-arms this poll itself.
+                restartNetworkStack()
+                return
+            }
+            if ((boundIp == null || ssdp == null) && bindRetries < MAX_BIND_RETRIES) {
+                bindRetries++
+                bindRetryHandler.postDelayed(this, BIND_RETRY_DELAY_MS)
+            }
+        }
+    }
+
+    private fun scheduleBindRetry() {
+        if (boundIp == null || ssdp == null) {
+            bindRetries = 0
+            bindRetryHandler.removeCallbacks(bindRetryTask)
+            bindRetryHandler.postDelayed(bindRetryTask, BIND_RETRY_DELAY_MS)
+        }
     }
 
     /**
@@ -331,6 +379,8 @@ class ReceiverService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CAST_NOTIFICATION_ID = 2
         private const val PREFERRED_PORT = 49_152
+        private const val BIND_RETRY_DELAY_MS = 3_000L
+        private const val MAX_BIND_RETRIES = 40
 
         /** True while the service instance is alive; read by the receivers. */
         @Volatile

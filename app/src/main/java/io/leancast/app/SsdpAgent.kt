@@ -8,6 +8,7 @@ import java.net.DatagramPacket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.MulticastSocket
+import java.net.NetworkInterface
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -25,14 +26,35 @@ class SsdpAgent(
     private var listenThread: Thread? = null
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
-    fun start() {
+    /**
+     * Joins the multicast group and starts listening. [networkInterface] pins
+     * the join (and outgoing packets) to the LAN interface: without it the
+     * socket joins on whatever the system picks at boot — with the network
+     * still down that is often loopback, so M-SEARCHes on the real LAN never
+     * arrive and the receiver stays undiscoverable until the app is opened.
+     */
+    fun start(networkInterface: NetworkInterface? = null) {
         if (running) return
         running = true
         val group = InetAddress.getByName(GROUP)
-        val sock = MulticastSocket(null).apply {
-            reuseAddress = true
-            bind(InetSocketAddress(PORT))
-            joinGroup(group)
+        val sock = MulticastSocket(null)
+        try {
+            sock.apply {
+                reuseAddress = true
+                bind(InetSocketAddress(PORT))
+                if (networkInterface != null) {
+                    this.networkInterface = networkInterface
+                    joinGroup(InetSocketAddress(group, PORT), networkInterface)
+                } else {
+                    joinGroup(group)
+                }
+            }
+        } catch (e: Exception) {
+            // Join failed (e.g. no network yet): don't leave a half-open
+            // socket behind — the caller retries once the network is up.
+            running = false
+            runCatching { sock.close() }
+            throw e
         }
         socket = sock
 

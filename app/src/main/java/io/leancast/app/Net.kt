@@ -1,6 +1,7 @@
 package io.leancast.app
 
 import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.NetworkInterface
 
 /** LAN address helpers for composing SSDP LOCATION and description URLs. */
@@ -14,5 +15,11 @@ object Net {
             .filterIsInstance<Inet4Address>()
             .firstOrNull { it.isSiteLocalAddress }
             ?.hostAddress
+    }.getOrNull()
+
+    /** Interface that owns the LAN address, or null when offline. */
+    fun lanInterface(): NetworkInterface? = runCatching {
+        val ip = lanIpv4() ?: return@runCatching null
+        NetworkInterface.getByInetAddress(InetAddress.getByName(ip))
     }.getOrNull()
 }
