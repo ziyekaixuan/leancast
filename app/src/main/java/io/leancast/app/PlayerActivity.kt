@@ -78,9 +78,21 @@ class PlayerActivity : AppCompatActivity() {
     /** Leaves the player only if no new cast materialised within the grace window. */
     private val finishIfStillIdle = Runnable {
         when (CastBus.session?.state) {
-            null, TransportState.NO_MEDIA_PRESENT -> finish()
+            null, TransportState.NO_MEDIA_PRESENT -> goBackgroundAndFinish()
             else -> Unit
         }
+    }
+
+    /**
+     * Playback ended: send the whole task to the background (launcher) instead
+     * of revealing whatever sits underneath this activity — usually MainActivity,
+     * since the player shares the app task — then tear the player screen down.
+     * If the task is already in the background, `moveTaskToBack` is a no-op and
+     * `finish()` alone keeps the old behaviour.
+     */
+    private fun goBackgroundAndFinish() {
+        moveTaskToBack(true)
+        finish()
     }
 
     private val sessionListener = CastSession.Listener { state ->
@@ -91,7 +103,7 @@ class PlayerActivity : AppCompatActivity() {
                 // tore this activity down while audio kept playing, and the
                 // follow-up launch for the new item was lost (the instance was
                 // already finishing) — the user saw the dashboard over audio.
-                TransportState.STOPPED -> finish()
+                TransportState.STOPPED -> goBackgroundAndFinish()
                 TransportState.NO_MEDIA_PRESENT -> scheduleIdleFinish()
                 TransportState.PAUSED_PLAYBACK -> {
                     ui.removeCallbacks(finishIfStillIdle)
