@@ -10,6 +10,10 @@
     <string name="notif_title">LeanCast 正在运行</string>
     <string name="notif_text">状态: %1$s</string>
 
+    <string name="cast_channel">开始投屏</string>
+    <string name="cast_notif_title">正在向这台电视投屏</string>
+    <string name="cast_notif_text">正在播放：%1$s</string>
+
     <string name="status_name">设备名称: %1$s</string>
     <string name="status_endpoint">监听地址: %1$s</string>
     <string name="status_state">状态: %1$s %2$s</string>

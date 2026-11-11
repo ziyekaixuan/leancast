@@ -215,6 +215,9 @@ class PlayerActivity : AppCompatActivity() {
     override fun onStop() {
         ui.removeCallbacks(tickProgress)
         playerView.player = null
+        // Hand the player back its offscreen surface so playback keeps
+        // decoding (audio + position) after this screen goes away.
+        CastBus.port?.attachHeadlessSurface()
         super.onStop()
     }
 

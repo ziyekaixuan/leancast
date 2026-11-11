@@ -80,6 +80,7 @@ class ReceiverService : Service() {
         runCatching { networkReceiver?.let(::unregisterReceiver) }
         networkReceiver = null
         isRunning = false
+        cancelCastNotification()
         stopNetworkStack()
         events.shutdown()
         playerPort.release()
@@ -171,6 +172,15 @@ class ReceiverService : Service() {
                     ),
                 )
             }
+            // A direct startActivity from a background service is blocked on
+            // Android 10+, which is why a cast right after boot never showed
+            // video until the app had been opened once: post the cast-start
+            // notification with a full-screen intent, which the system is
+            // allowed to launch from the background.
+            postCastNotification()
+        }
+        if (state == TransportState.STOPPED) {
+            cancelCastNotification()
         }
         updateNotification(state)
         events.publish("avt", eventBody("avt"))
@@ -256,9 +266,68 @@ class ReceiverService : Service() {
         nm.notify(NOTIFICATION_ID, buildNotification(state))
     }
 
+    /**
+     * Posts the cast-start notification with a full-screen intent to the
+     * player screen. High-importance channel: that is what lets the system
+     * launch the activity immediately, even when the app has never been
+     * opened since boot. The intent targets singleTop PlayerActivity, so
+     * firing it while the player is already up is a harmless re-delivery.
+     */
+    private fun postCastNotification() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CAST_CHANNEL_ID,
+                    getString(R.string.cast_channel),
+                    NotificationManager.IMPORTANCE_HIGH,
+                ),
+            )
+        }
+        val pi = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, PlayerActivity::class.java).addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK,
+            ),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val builder = if (Build.VERSION.SDK_INT >= 26) {
+            Notification.Builder(this, CAST_CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this).apply {
+                priority = Notification.PRIORITY_HIGH
+            }
+        }
+        val title = if (::session.isInitialized) {
+            session.currentTitle?.takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
+        val notification = builder
+            .setSmallIcon(R.drawable.ic_stat_notify)
+            .setContentTitle(getString(R.string.cast_notif_title))
+            .setContentText(
+                title?.let { getString(R.string.cast_notif_text, it) }
+                    ?: getString(R.string.app_name),
+            )
+            .setContentIntent(pi)
+            .setFullScreenIntent(pi, true)
+            .setAutoCancel(true)
+            .build()
+        nm.notify(CAST_NOTIFICATION_ID, notification)
+    }
+
+    private fun cancelCastNotification() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(CAST_NOTIFICATION_ID)
+    }
+
     companion object {
         private const val CHANNEL_ID = "receiver"
+        private const val CAST_CHANNEL_ID = "cast"
         private const val NOTIFICATION_ID = 1
+        private const val CAST_NOTIFICATION_ID = 2
         private const val PREFERRED_PORT = 49_152
 
         /** True while the service instance is alive; read by the receivers. */

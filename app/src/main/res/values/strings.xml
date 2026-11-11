@@ -10,6 +10,10 @@
     <string name="notif_title">LeanCast Active</string>
     <string name="notif_text">Status: %1$s</string>
 
+    <string name="cast_channel">Cast Started</string>
+    <string name="cast_notif_title">Casting to this TV</string>
+    <string name="cast_notif_text">Now playing: %1$s</string>
+
     <string name="status_name">Device: %1$s</string>
     <string name="status_endpoint">Endpoint: %1$s</string>
     <string name="status_state">Status: %1$s %2$s</string>

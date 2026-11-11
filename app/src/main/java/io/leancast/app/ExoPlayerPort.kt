@@ -1,9 +1,11 @@
 package io.leancast.app
 
 import android.content.Context
+import android.graphics.SurfaceTexture
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Surface
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -32,6 +34,9 @@ class ExoPlayerPort(private val context: Context) : PlayerPort {
 
     private val main = Handler(Looper.getMainLooper())
     private var player: ExoPlayer? = null
+    /** Offscreen surface so playback never depends on PlayerActivity existing. */
+    private var headlessTexture: SurfaceTexture? = null
+    private var headlessSurface: Surface? = null
     private val poller = object : Runnable {
         override fun run() {
             player?.let { p ->
@@ -99,8 +104,34 @@ class ExoPlayerPort(private val context: Context) : PlayerPort {
         main.post {
             player?.release()
             player = null
+            headlessSurface?.release()
+            headlessSurface = null
+            headlessTexture?.release()
+            headlessTexture = null
         }
         main.removeCallbacks(poller)
+    }
+
+    /**
+     * Gives the player an offscreen surface so decoding (and audio) never
+     * depend on PlayerActivity existing: right after boot a cast can start
+     * before any activity has run, and without a surface the video has
+     * nowhere to go. PlayerView replaces this surface when the player screen
+     * attaches; call this again after it detaches (PlayerActivity.onStop) to
+     * restore it.
+     */
+    fun attachHeadlessSurface() {
+        main.post {
+            val p = player ?: return@post
+            runCatching {
+                if (headlessSurface == null) {
+                    val tex = SurfaceTexture(0).apply { setDefaultBufferSize(1280, 720) }
+                    headlessTexture = tex
+                    headlessSurface = Surface(tex)
+                }
+                headlessSurface?.let { p.setVideoSurface(it) }
+            }
+        }
     }
 
     private fun obtain(): ExoPlayer =
@@ -109,6 +140,7 @@ class ExoPlayerPort(private val context: Context) : PlayerPort {
             cachedPositionMs = 0
             cachedDurationMs = 0
             cachedIsLive = false
+            attachHeadlessSurface()
             main.post(poller)
         }
 
