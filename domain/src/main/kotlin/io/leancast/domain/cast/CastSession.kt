@@ -165,6 +165,21 @@ class CastSession(
     }
 
     /**
+     * Steps the playback speed one notch in [PlaybackSpeedPolicy.STEPS] when
+     * VOD media is active (D-pad down = faster, up = slower); returns the new
+     * speed, or `null` when ignored (live, idle, or already at the end).
+     */
+    fun stepPlaybackSpeed(faster: Boolean): Float? {
+        if (!canAdjustSpeed()) return null
+        val next = if (faster) PlaybackSpeedPolicy.fasterSpeed(playbackSpeed)
+            else PlaybackSpeedPolicy.slowerSpeed(playbackSpeed)
+        if (kotlin.math.abs(next - playbackSpeed) < 0.001f) return null
+        playbackSpeed = next
+        port.setPlaybackSpeed(next)
+        return next
+    }
+
+    /**
      * Applies an explicit supported speed (e.g. from a UPnP `Play` action with
      * a non-default `Speed` argument). Ignored for live streams or unsupported values.
      */

@@ -110,28 +110,58 @@ class ExoPlayerPort(private val context: Context) : PlayerPort {
             headlessTexture = null
         }
         main.removeCallbacks(poller)
+        main.removeCallbacks(headlessFallback)
+    }
+
+    /** True while a PlayerView is displaying this player: the offscreen surface must not steal it back. */
+    @Volatile private var viewAttached = false
+
+    /** The offscreen surface, attached only after [HEADLESS_FALLBACK_DELAY_MS] when no PlayerView has taken the player. */
+    private val headlessFallback = Runnable { attachHeadlessSurface() }
+
+    /** Marks whether a PlayerView currently owns the player's video surface. */
+    fun setViewAttached(attached: Boolean) {
+        viewAttached = attached
     }
 
     /**
      * Gives the player an offscreen surface so decoding (and audio) never
      * depend on PlayerActivity existing: right after boot a cast can start
      * before any activity has run, and without a surface the video has
-     * nowhere to go. PlayerView replaces this surface when the player screen
-     * attaches; call this again after it detaches (PlayerActivity.onStop) to
-     * restore it.
+     * nowhere to go. Skipped while a PlayerView owns the surface: handing
+     * the decoder back to the offscreen surface mid-playback leaves the
+     * screen black on decoders that cannot switch outputs while running.
+     * Runs at once on the main thread (all callers are already there), so a
+     * queued attach can never land after a PlayerView took over.
      */
     fun attachHeadlessSurface() {
-        main.post {
-            val p = player ?: return@post
-            runCatching {
-                if (headlessSurface == null) {
-                    val tex = SurfaceTexture(0).apply { setDefaultBufferSize(1280, 720) }
-                    headlessTexture = tex
-                    headlessSurface = Surface(tex)
-                }
-                headlessSurface?.let { p.setVideoSurface(it) }
-            }
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { attachHeadlessSurface() }
+            return
         }
+        if (viewAttached) return
+        val p = player ?: return
+        runCatching {
+            if (headlessSurface == null) {
+                val tex = SurfaceTexture(0).apply { setDefaultBufferSize(1280, 720) }
+                headlessTexture = tex
+                headlessSurface = Surface(tex)
+            }
+            headlessSurface?.let { p.setVideoSurface(it) }
+        }
+    }
+
+    /**
+     * Drops the player's current video surface (the offscreen one) so the
+     * next surface set — PlayerView's — is a fresh bind, not a switch while
+     * the decoder is running. PlayerActivity calls this before attaching.
+     */
+    fun clearVideoSurface() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { clearVideoSurface() }
+            return
+        }
+        runCatching { player?.setVideoSurface(null) }
     }
 
     private fun obtain(): ExoPlayer =
@@ -140,7 +170,12 @@ class ExoPlayerPort(private val context: Context) : PlayerPort {
             cachedPositionMs = 0
             cachedDurationMs = 0
             cachedIsLive = false
-            attachHeadlessSurface()
+            // Do NOT hand the decoder the offscreen surface yet: PlayerActivity
+            // is launched on TRANSITIONING and its surface should be the first
+            // one the decoder sees — switching outputs mid-stream leaves the
+            // screen black on this TV's decoder. The offscreen surface is only
+            // a fallback if no view takes the player in time.
+            main.postDelayed(headlessFallback, HEADLESS_FALLBACK_DELAY_MS)
             main.post(poller)
         }
 
@@ -204,5 +239,7 @@ class ExoPlayerPort(private val context: Context) : PlayerPort {
         private const val POLL_MS = 500L
         private const val CONNECT_TIMEOUT_MS = 8_000
         private const val READ_TIMEOUT_MS = 8_000
+        /** How long PlayerActivity gets to take the player before the offscreen surface is used as a fallback. */
+        private const val HEADLESS_FALLBACK_DELAY_MS = 2_000L
     }
 }

@@ -13,6 +13,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -23,6 +24,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.ui.PlayerView
 import io.leancast.domain.cast.CastSession
 import io.leancast.domain.cast.OsdFormatter
+import io.leancast.domain.cast.PlaybackSpeedPolicy
 import io.leancast.domain.cast.SeekStepPolicy
 import io.leancast.domain.cast.TransportState
 
@@ -198,11 +200,20 @@ class PlayerActivity : AppCompatActivity() {
     /**
      * Surface-race guard: on fast TVs the player can be created after this
      * activity started, leaving the video with no surface (audio only, no
-     * error). Re-attach whenever we notice the mismatch.
+     * error). Re-attach whenever we notice the mismatch. The offscreen
+     * surface is dropped first so the decoder binds fresh to this view
+     * instead of switching outputs mid-stream (black screen on the first
+     * cast after boot).
      */
     private fun attachPlayerIfMissing() {
         if (playerView.player == null) {
-            playerView.player = CastBus.port?.currentPlayer
+            val port = CastBus.port
+            val player = port?.currentPlayer
+            if (player != null) {
+                port.clearVideoSurface()
+                playerView.player = player
+                port.setViewAttached(true)
+            }
         }
     }
 
@@ -214,6 +225,7 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onStop() {
         ui.removeCallbacks(tickProgress)
+        CastBus.port?.setViewAttached(false)
         playerView.player = null
         // Hand the player back its offscreen surface so playback keeps
         // decoding (audio + position) after this screen goes away.
@@ -229,13 +241,17 @@ class PlayerActivity : AppCompatActivity() {
                 else session.resume()
                 true
             }
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> {
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                onUpKeyDown(event)
+                true
+            }
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> {
                 showOsdBars(persistent = session.state != TransportState.PLAYING)
                 true
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
                 if ((event?.repeatCount ?: 0) == 0 && !session.isLive()) {
-                    session.cyclePlaybackSpeed()?.let { speed ->
+                    session.stepPlaybackSpeed(faster = true)?.let { speed ->
                         showOsdBars(persistent = session.state != TransportState.PLAYING)
                         showCenterMessage(
                             mainText = "⏩  ${OsdFormatter.formatSpeed(speed)}",
@@ -266,6 +282,76 @@ class PlayerActivity : AppCompatActivity() {
             }
             else -> super.onKeyDown(keyCode, event)
         }
+    }
+
+    /**
+     * D-pad up: a short tap steps the speed down one notch; holding it past
+     * the long-press timeout plays at 2x until release, then restores the
+     * speed from before the hold. A posted runnable (not key repeats) detects
+     * the hold, so remotes that send no repeats work too. Live streams keep
+     * the old behaviour (up just shows the OSD).
+     */
+    private var upDownAtMs = 0L
+    private var upHeld = false
+    private var fastForwardActive = false
+    private var speedBeforeFastForward = PlaybackSpeedPolicy.DEFAULT_SPEED
+
+    private val enterFastForward = Runnable {
+        if (!upHeld || fastForwardActive) return@Runnable
+        val session = CastBus.session ?: return@Runnable
+        if (session.isLive()) return@Runnable
+        speedBeforeFastForward = session.playbackSpeed
+        if (session.setPlaybackSpeed(2.0f)) {
+            fastForwardActive = true
+            showOsdBars(persistent = session.state != TransportState.PLAYING)
+            showCenterMessage(
+                mainText = "⏩  ${OsdFormatter.formatSpeed(2.0f)}",
+                subText = currentClockSummary(),
+                persistent = false,
+            )
+        }
+    }
+
+    private fun onUpKeyDown(event: KeyEvent?) {
+        // Only the first press arms the hold detector; repeats do nothing.
+        if ((event?.repeatCount ?: 0) != 0) return
+        upDownAtMs = event?.eventTime ?: 0L
+        upHeld = true
+        fastForwardActive = false
+        ui.postDelayed(enterFastForward, ViewConfiguration.getLongPressTimeout().toLong())
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode != KeyEvent.KEYCODE_DPAD_UP) return super.onKeyUp(keyCode, event)
+        upHeld = false
+        ui.removeCallbacks(enterFastForward)
+        val session = CastBus.session ?: return true
+        if (fastForwardActive) {
+            fastForwardActive = false
+            if (session.setPlaybackSpeed(speedBeforeFastForward)) {
+                showOsdBars(persistent = session.state != TransportState.PLAYING)
+                showCenterMessage(
+                    mainText = "⏩  ${OsdFormatter.formatSpeed(speedBeforeFastForward)}",
+                    subText = currentClockSummary(),
+                    persistent = false,
+                )
+            }
+        } else if (!session.isLive()) {
+            val heldMs = (event?.eventTime ?: 0L) - upDownAtMs
+            if (heldMs < ViewConfiguration.getLongPressTimeout()) {
+                session.stepPlaybackSpeed(faster = false)?.let { speed ->
+                    showOsdBars(persistent = session.state != TransportState.PLAYING)
+                    showCenterMessage(
+                        mainText = "⏩  ${OsdFormatter.formatSpeed(speed)}",
+                        subText = currentClockSummary(),
+                        persistent = false,
+                    )
+                }
+            }
+        } else {
+            showOsdBars(persistent = session.state != TransportState.PLAYING)
+        }
+        return true
     }
 
     /**

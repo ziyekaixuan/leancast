@@ -8,6 +8,9 @@ import kotlin.math.abs
  * Cycle order starts at 1.0x so the first press reaches 1.25x, then 1.5x, 2.0x,
  * wraps through 0.75x, and returns to 1.0x:
  * `1.0 -> 1.25 -> 1.5 -> 2.0 -> 0.75 -> 1.0`.
+ *
+ * Directional stepping (D-pad down = faster, up = slower) instead clamps at
+ * the ends: at 2.0x down stays at 2.0x, at 0.75x up stays at 0.75x.
  */
 object PlaybackSpeedPolicy {
 
@@ -20,6 +23,20 @@ object PlaybackSpeedPolicy {
         val index = STEPS.indexOfFirst { abs(it - current) < 0.001f }
         if (index < 0) return DEFAULT_SPEED
         return STEPS[(index + 1) % STEPS.size]
+    }
+
+    /** One step faster than [current], clamped at the fastest step. */
+    fun fasterSpeed(current: Float): Float {
+        val index = STEPS.indexOfFirst { abs(it - current) < 0.001f }
+        if (index < 0) return DEFAULT_SPEED
+        return STEPS[minOf(index + 1, STEPS.lastIndex)]
+    }
+
+    /** One step slower than [current], clamped at the slowest step. */
+    fun slowerSpeed(current: Float): Float {
+        val index = STEPS.indexOfFirst { abs(it - current) < 0.001f }
+        if (index < 0) return DEFAULT_SPEED
+        return STEPS[maxOf(index - 1, 0)]
     }
 
     /**

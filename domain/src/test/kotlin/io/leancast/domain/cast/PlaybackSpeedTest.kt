@@ -101,6 +101,43 @@ class PlaybackSpeedTest {
     }
 
     @Test
+    fun `stepPlaybackSpeed moves one notch and clamps at the ends`() {
+        val port = FakePort()
+        val session = CastSession(port)
+        session.setUri("http://cdn/video.mp4", null)
+        session.play()
+        session.onPlayerPrepared()
+
+        assertEquals(1.25f, session.stepPlaybackSpeed(faster = true) ?: -1f, 0.001f)
+        assertEquals(1.5f, session.stepPlaybackSpeed(faster = true) ?: -1f, 0.001f)
+        assertEquals(2.0f, session.stepPlaybackSpeed(faster = true) ?: -1f, 0.001f)
+        assertNull(session.stepPlaybackSpeed(faster = true))
+        assertEquals(2.0f, session.playbackSpeed, 0.001f)
+
+        assertEquals(1.5f, session.stepPlaybackSpeed(faster = false) ?: -1f, 0.001f)
+        assertEquals(1.25f, session.stepPlaybackSpeed(faster = false) ?: -1f, 0.001f)
+        assertEquals(1.0f, session.stepPlaybackSpeed(faster = false) ?: -1f, 0.001f)
+        assertEquals(0.75f, session.stepPlaybackSpeed(faster = false) ?: -1f, 0.001f)
+        assertNull(session.stepPlaybackSpeed(faster = false))
+        assertEquals(0.75f, session.playbackSpeed, 0.001f)
+        assertEquals(0.75f, port.appliedSpeed, 0.001f)
+    }
+
+    @Test
+    fun `live or idle session ignores speed stepping`() {
+        val livePort = FakePort(live = true)
+        val liveSession = CastSession(livePort)
+        liveSession.setUri("http://live/stream.m3u8", null)
+        liveSession.play()
+        liveSession.onPlayerPrepared()
+        assertNull(liveSession.stepPlaybackSpeed(faster = true))
+        assertNull(liveSession.stepPlaybackSpeed(faster = false))
+
+        val idleSession = CastSession(FakePort())
+        assertNull(idleSession.stepPlaybackSpeed(faster = true))
+    }
+
+    @Test
     fun `routine SOAP Play with Speed 1 preserves TV-selected speed, explicit non-1 Speed applies`() {
         val port = FakePort()
         val session = CastSession(port)
