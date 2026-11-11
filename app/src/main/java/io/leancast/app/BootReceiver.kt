@@ -24,6 +24,10 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     companion object {
+        // Declared first: START_ACTIONS below reads it, and companion
+        // properties initialise in declaration order.
+        const val ACTION_QUICKBOOT_POWERON = "android.intent.action.QUICKBOOT_POWERON"
+
         val START_ACTIONS = setOf(
             Intent.ACTION_BOOT_COMPLETED,
             ACTION_QUICKBOOT_POWERON,
@@ -33,6 +37,5 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_TIME_CHANGED,
             Intent.ACTION_TIMEZONE_CHANGED,
         )
-        const val ACTION_QUICKBOOT_POWERON = "android.intent.action.QUICKBOOT_POWERON"
     }
 }
