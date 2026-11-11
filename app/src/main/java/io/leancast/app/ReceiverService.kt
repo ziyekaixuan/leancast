@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import io.leancast.domain.cast.CastSession
 import io.leancast.domain.cast.TransportState
 import io.leancast.domain.cast.VolumeMath
@@ -40,12 +41,15 @@ class ReceiverService : Service() {
     private var boundIp: String? = null
     private var networkReceiver: NetworkChangeReceiver? = null
     private val bindRetryHandler = Handler(Looper.getMainLooper())
-    private var bindRetries = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        val version = runCatching {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        }.getOrNull()
+        Log.i(TAG, "LeanCast $version starting (API ${Build.VERSION.SDK_INT})")
         // Promote to foreground first: `startForegroundService` gives us only an
         // ~5 s window, so do it before the (slower) player/server wiring below.
         startForeground(NOTIFICATION_ID, buildNotification())
@@ -75,7 +79,9 @@ class ReceiverService : Service() {
         // reconnect): rebind SSDP when the LAN address changed, so the
         // receiver stays discoverable on the new network. Same address
         // means nothing to do — this also swallows broadcast bursts.
-        if (::settings.isInitialized && boundIp != Net.lanIpv4()) {
+        val ip = Net.lanIpv4()
+        Log.i(TAG, "onStartCommand: boundIp=$boundIp lanIp=$ip ssdp=${ssdp != null}")
+        if (::settings.isInitialized && boundIp != ip) {
             restartNetworkStack()
         }
         return START_STICKY
@@ -128,13 +134,23 @@ class ReceiverService : Service() {
                 location = "http://${lanIp}:${server.boundPort}/desc.xml",
                 serverToken = serverToken(),
             )
+            // The multicast lock is only useful once Wi-Fi is actually up:
+            // acquiring it while the radio is still down can leave the
+            // driver filtering multicast even after the network connects.
+            acquireMulticastLock()
+            Log.i(
+                TAG,
+                "startNetworkStack: SSDP on ${Net.lanInterface()?.name} " +
+                    "location=http://$lanIp:${server.boundPort}/desc.xml " +
+                    "mcastHeld=${multicastLock?.isHeld}",
+            )
             runCatching { SsdpAgent(identity).also { it.start(Net.lanInterface()) } }
+                .onFailure { Log.w(TAG, "SSDP start failed: ${it.javaClass.simpleName}") }
                 .getOrNull()
         } else {
+            Log.i(TAG, "startNetworkStack: no LAN IP yet, SSDP skipped")
             null
         }
-
-        acquireMulticastLock()
     }
 
     private fun stopNetworkStack() {
@@ -154,21 +170,22 @@ class ReceiverService : Service() {
     /**
      * Boot safety net: the network broadcasts normally trigger the rebind,
      * but on some firmwares the burst arrives before DHCP hands out an
-     * address (and is then debounced away), leaving the receiver
-     * undiscoverable until the app is opened once. Poll until the stack is
-     * bound; the broadcasts remain the fast path.
+     * address (and is then debounced away), and old TVs can take minutes
+     * to bring Wi-Fi up — so this polls until the stack is bound, with no
+     * retry cap. The broadcasts remain the fast path.
      */
     private val bindRetryTask = object : Runnable {
         override fun run() {
             if (!isRunning) return
             val ip = Net.lanIpv4()
             if (ip != null && (boundIp != ip || ssdp == null)) {
+                Log.i(TAG, "bind-retry: LAN up ($ip), rebinding")
                 // restartNetworkStack() re-arms this poll itself.
                 restartNetworkStack()
                 return
             }
-            if ((boundIp == null || ssdp == null) && bindRetries < MAX_BIND_RETRIES) {
-                bindRetries++
+            if (boundIp == null || ssdp == null) {
+                Log.d(TAG, "bind-retry: still waiting for LAN (ip=$ip)")
                 bindRetryHandler.postDelayed(this, BIND_RETRY_DELAY_MS)
             }
         }
@@ -176,7 +193,6 @@ class ReceiverService : Service() {
 
     private fun scheduleBindRetry() {
         if (boundIp == null || ssdp == null) {
-            bindRetries = 0
             bindRetryHandler.removeCallbacks(bindRetryTask)
             bindRetryHandler.postDelayed(bindRetryTask, BIND_RETRY_DELAY_MS)
         }
@@ -374,13 +390,13 @@ class ReceiverService : Service() {
     }
 
     companion object {
+        private const val TAG = "LeanCast"
         private const val CHANNEL_ID = "receiver"
         private const val CAST_CHANNEL_ID = "cast"
         private const val NOTIFICATION_ID = 1
         private const val CAST_NOTIFICATION_ID = 2
         private const val PREFERRED_PORT = 49_152
-        private const val BIND_RETRY_DELAY_MS = 3_000L
-        private const val MAX_BIND_RETRIES = 40
+        private const val BIND_RETRY_DELAY_MS = 5_000L
 
         /** True while the service instance is alive; read by the receivers. */
         @Volatile

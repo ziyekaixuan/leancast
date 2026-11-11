@@ -1,5 +1,6 @@
 package io.leancast.app
 
+import android.util.Log
 import io.leancast.domain.ssdp.SsdpIdentity
 import io.leancast.domain.ssdp.SsdpInbound
 import io.leancast.domain.ssdp.SsdpMessageParser
@@ -57,6 +58,7 @@ class SsdpAgent(
             throw e
         }
         socket = sock
+        Log.i(TAG, "SSDP listening on ${networkInterface?.name ?: "default"}:1900, location=${identity.location}")
 
         listenThread = Thread {
             val buf = ByteArray(2048)
@@ -67,7 +69,10 @@ class SsdpAgent(
                     if (packet.address.isLoopbackAddress) continue
                     val copy = packet.data.copyOf(packet.length)
                     when (val msg = SsdpMessageParser.parse(copy, packet.address, packet.port)) {
-                        is SsdpInbound.MSearch -> scheduleResponses(msg, sock)
+                        is SsdpInbound.MSearch -> {
+                            Log.d(TAG, "M-SEARCH from ${packet.address.hostAddress}:${packet.port}")
+                            scheduleResponses(msg, sock)
+                        }
                         is SsdpInbound.Ignored -> Unit
                     }
                 } catch (_: Exception) {
@@ -133,6 +138,7 @@ class SsdpAgent(
     }
 
     companion object {
+        private const val TAG = "LeanCast"
         const val GROUP = "239.255.255.250"
         const val PORT = 1900
     }

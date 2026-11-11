@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.wifi.WifiManager
 import android.os.SystemClock
+import android.util.Log
 
 /**
  * Brings the receiver back when the network comes up or Wi-Fi changes.
@@ -23,6 +24,7 @@ import android.os.SystemClock
 class NetworkChangeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action !in ACTIONS) return
+        Log.i(TAG, "net-change ${intent.action} ip=${Net.lanIpv4()}")
         // Wi-Fi being switched off (or still off): nothing to bind to.
         if (intent.action == WifiManager.WIFI_STATE_CHANGED_ACTION &&
             intent.getIntExtra(
@@ -45,6 +47,7 @@ class NetworkChangeReceiver : BroadcastReceiver() {
     }
 
     companion object {
+        private const val TAG = "LeanCast"
         val ACTIONS = arrayOf(
             ConnectivityManager.CONNECTIVITY_ACTION,
             WifiManager.WIFI_STATE_CHANGED_ACTION,
