@@ -28,11 +28,15 @@ android {
     signingConfigs {
         if (!keystoreB64.isNullOrEmpty()) {
             create("ci") {
-                val ksFile = rootProject.file("ci-release.keystore")
+                // The release key is a PKCS#12 keystore (generated with openssl,
+                // since no JDK was available where the key was created). storeType
+                // must be explicit: the default JKS loader cannot read a .p12 file.
+                val ksFile = rootProject.file("ci-release.p12")
                 Base64.getDecoder().decode(keystoreB64).inputStream().use { input ->
                     ksFile.outputStream().use { output -> input.copyTo(output) }
                 }
                 storeFile = ksFile
+                storeType = "pkcs12"
                 storePassword = System.getenv("KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("KEY_ALIAS") ?: "leancast"
                 keyPassword = System.getenv("KEY_PASSWORD")
