@@ -9,11 +9,15 @@ import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 import android.view.animation.LinearInterpolator
+import kotlin.math.max
+import kotlin.math.sin
 
 /**
- * Minimal loading spinner: a faint full ring with a bright 2/3 arc rotating
- * over it. No text, no background — just the ring, centered on screen while
- * the first frames load. Drawn by hand rather than using the platform's
+ * Minimal loading indicator: three dots in a row, bouncing up in sequence
+ * like a wave, inside a dark rounded pill — the typing-indicator look,
+ * adapted to the dark TV OSD (same pill fill and sky-blue outline as the
+ * center pill). No text — just the dots, centered on screen while the
+ * first frames load. Drawn by hand rather than using the platform's
  * indeterminate ProgressBar so it looks identical on every TV skin.
  */
 class LoadingSpinnerView @JvmOverloads constructor(
@@ -24,52 +28,85 @@ class LoadingSpinnerView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
 
-    private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = STROKE_DP * density
-        color = TRACK_COLOR
+    private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.parseColor("#D90F172A")
     }
 
-    private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val pillStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = STROKE_DP * density
-        strokeCap = Paint.Cap.ROUND
-        color = ARC_COLOR
+        strokeWidth = PILL_STROKE_DP * density
+        color = Color.parseColor("#38BDF8")
     }
 
-    private val bounds = RectF()
-    private var rotation = 0f
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.WHITE
+    }
+
+    /** Pill bounds and corner radius; the dots sit centered inside. */
+    private val pillRect = RectF()
+    private var cornerRadius = 0f
+
+    /** Horizontal centers of the three dots, and their resting height. */
+    private val dotCx = FloatArray(DOT_COUNT)
+    private var baselineCy = 0f
+    private var bounceAmplitude = 0f
+    private var progress = 0f
     private var animator: ValueAnimator? = null
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        val inset = trackPaint.strokeWidth / 2f + 1f * density
-        bounds.set(inset, inset, w - inset, h - inset)
+        val strokeHalf = pillStrokePaint.strokeWidth / 2f
+        pillRect.set(strokeHalf, strokeHalf, w - strokeHalf, h - strokeHalf)
+        cornerRadius = h / 2f
+        val radius = DOT_RADIUS_DP * density
+        val gap = DOT_GAP_DP * density
+        val totalWidth = DOT_COUNT * 2 * radius + (DOT_COUNT - 1) * gap
+        var cx = (w - totalWidth) / 2f + radius
+        for (i in 0 until DOT_COUNT) {
+            dotCx[i] = cx
+            cx += 2 * radius + gap
+        }
+        // The dots' travel band (bounce + dot height) sits centered in
+        // the pill; the rest position is half a bounce below center.
+        bounceAmplitude = BOUNCE_DP * density
+        baselineCy = h / 2f + bounceAmplitude / 2f
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        canvas.drawOval(bounds, trackPaint)
-        canvas.drawArc(bounds, rotation, ARC_SWEEP_DEGREES, false, arcPaint)
+        canvas.drawRoundRect(pillRect, cornerRadius, cornerRadius, pillPaint)
+        canvas.drawRoundRect(pillRect, cornerRadius, cornerRadius, pillStrokePaint)
+        val radius = DOT_RADIUS_DP * density
+        for (i in 0 until DOT_COUNT) {
+            // Each dot rises for half the cycle, staggered by a third of
+            // a cycle, so the bounce travels left to right in a wave.
+            val phase = progress * TWO_PI - i * TWO_PI / DOT_COUNT
+            val lift = max(0f, sin(phase))
+            val cy = baselineCy - bounceAmplitude * lift
+            dotPaint.alpha = ((MIN_ALPHA + (1f - MIN_ALPHA) * lift) * 255).toInt()
+            canvas.drawCircle(dotCx[i], cy, radius, dotPaint)
+        }
     }
 
-    /** Starts the rotation; safe to call when already spinning. */
+    /** Starts the bounce; safe to call when already running. */
     fun start() {
         if (animator != null) return
-        animator = ValueAnimator.ofFloat(0f, 360f).apply {
-            duration = ROTATION_MS
+        animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = CYCLE_MS
             interpolator = LinearInterpolator()
             repeatCount = ValueAnimator.INFINITE
-            addUpdateListener { rotation = it.animatedValue as Float; invalidate() }
+            addUpdateListener { progress = it.animatedValue as Float; invalidate() }
             start()
         }
     }
 
-    /** Stops the rotation and resets the arc to the top. */
+    /** Stops the bounce and settles the dots back on the baseline. */
     fun stop() {
         animator?.cancel()
         animator = null
-        rotation = 0f
+        progress = 0f
         invalidate()
     }
 
@@ -79,19 +116,24 @@ class LoadingSpinnerView @JvmOverloads constructor(
     }
 
     companion object {
-        /** Stroke width of the ring and the arc. */
-        private const val STROKE_DP = 4f
+        private const val DOT_COUNT = 3
 
-        /** The arc covers two thirds of the circle. */
-        private const val ARC_SWEEP_DEGREES = 240f
+        /** Dot radius and the gap between dots. */
+        private const val DOT_RADIUS_DP = 5f
+        private const val DOT_GAP_DP = 10f
 
-        /** One full turn per 900 ms — calm, not frantic. */
-        private const val ROTATION_MS = 900L
+        /** How high a dot rises at the peak of its bounce. */
+        private const val BOUNCE_DP = 8f
 
-        /** Faint white ring, barely there. */
-        private val TRACK_COLOR = Color.argb(0x2E, 0xFF, 0xFF, 0xFF)
+        /** Pill outline width, matching the center pill. */
+        private const val PILL_STROKE_DP = 2f
 
-        /** Near-white arc. */
-        private val ARC_COLOR = Color.argb(0xE6, 0xFF, 0xFF, 0xFF)
+        /** One full wave per 1.2 s — calm, not frantic. */
+        private const val CYCLE_MS = 1200L
+
+        /** A resting dot is dimmer; it brightens as it rises. */
+        private const val MIN_ALPHA = 0.45f
+
+        private const val TWO_PI = 6.2831855f
     }
 }

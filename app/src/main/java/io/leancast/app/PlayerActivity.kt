@@ -34,10 +34,10 @@ import io.leancast.domain.cast.TransportState
  * - Top gradient bar: live status pill + video title
  * - Center glassmorphic pill: state (`|| Paused` / `▶ Playing`) or signed seek
  *   delta + target timestamp (`▶▶ +30s → 01:45`)
- * - Loading spinner: faint ring + rotating 2/3 arc, center screen while loading
+ * - Loading indicator: three dots bouncing in a dark pill, center screen while loading
  * - Bottom gradient bar: elapsed/total time, high-contrast progress bar, and D-pad legend
  *
- * The initial playback screen shows nothing but the loading spinner until
+ * The initial playback screen shows nothing but the loading dots until
  * the first frames arrive. The progress screen (top/bottom bars) is
  * summoned only by left/right (seek) and the menu key, which toggles it;
  * it auto-hides after 3 s of no operation while playing.
@@ -231,15 +231,15 @@ class PlayerActivity : AppCompatActivity() {
             ),
         )
 
-        // Loading spinner: a faint ring with a rotating 2/3 arc, centered
-        // on screen while the first frames load. Above the player, the
-        // image view and the center pill.
+        // Loading indicator: three dots bouncing in sequence inside a
+        // dark pill, centered on screen while the first frames load.
+        // Above the player, the image view and the center pill.
         loadingSpinner = LoadingSpinnerView(this).apply {
             visibility = View.GONE
         }
         root.addView(
             loadingSpinner,
-            FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER),
+            FrameLayout.LayoutParams(dp(96), dp(48), Gravity.CENTER),
         )
         root.addView(
             bottomBar,
