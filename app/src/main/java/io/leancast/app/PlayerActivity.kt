@@ -32,9 +32,12 @@ import io.leancast.domain.cast.TransportState
 /**
  * Fullscreen playback surface with a dedicated 10-foot Android TV OSD:
  * - Top gradient bar: live status pill + video title
- * - Center glassmorphic pill: state (`⏸ Paused` / `▶ Playing`) or signed seek
- *   delta + target timestamp (`⏩ +30s → 01:45`)
+ * - Center glassmorphic pill: state (`|| Paused` / `▶ Playing`) or signed seek
+ *   delta + target timestamp (`▶▶ +30s → 01:45`)
  * - Bottom gradient bar: elapsed/total time, high-contrast progress bar, and D-pad legend
+ *
+ * OSD icons use only glyphs the Android 6 system font ships (▶ ◀ ● and ASCII):
+ * ⏸ ⏩ ⏪ ⏳ render as missing-glyph boxes on that TV, so never use them here.
  */
 class PlayerActivity : AppCompatActivity() {
 
@@ -97,8 +100,13 @@ class PlayerActivity : AppCompatActivity() {
         finish()
     }
 
+    /** Previous session state, so PLAYING can tell a resume from a fresh start. */
+    private var lastSessionState: TransportState? = null
+
     private val sessionListener = CastSession.Listener { state ->
         runOnUiThread {
+            val previousState = lastSessionState
+            lastSessionState = state
             when (state) {
                 // A sender switching source does SetAVTransportURI + Play back to
                 // back, so NO_MEDIA_PRESENT is transient. Finishing straight away
@@ -124,11 +132,19 @@ class PlayerActivity : AppCompatActivity() {
                     attachPlayerIfMissing()
                     showImageIfAvailable()
                     showOsdBars(persistent = false)
-                    showCenterMessage(
-                        mainText = getString(R.string.osd_playing),
-                        subText = currentClockSummary(),
-                        persistent = false,
-                    )
+                    // A fresh cast reaches PLAYING from TRANSITIONING: the
+                    // "resume" pill would be noise at 00:00, so just clear
+                    // the loading pill. Only a resume from PAUSED_PLAYBACK
+                    // earns the "Playing" confirmation.
+                    if (previousState == TransportState.PAUSED_PLAYBACK) {
+                        showCenterMessage(
+                            mainText = getString(R.string.osd_playing),
+                            subText = currentClockSummary(),
+                            persistent = false,
+                        )
+                    } else {
+                        hideCenterPillNow()
+                    }
                 }
                 TransportState.TRANSITIONING -> {
                     ui.removeCallbacks(finishIfStillIdle)
@@ -306,7 +322,7 @@ class PlayerActivity : AppCompatActivity() {
                     session.stepPlaybackSpeed(faster = true)?.let { speed ->
                         showOsdBars(persistent = session.state != TransportState.PLAYING)
                         showCenterMessage(
-                            mainText = "⏩  ${OsdFormatter.formatSpeed(speed)}",
+                            mainText = "▶▶  ${OsdFormatter.formatSpeed(speed)}",
                             subText = currentClockSummary(),
                             persistent = false,
                         )
@@ -357,7 +373,7 @@ class PlayerActivity : AppCompatActivity() {
             fastForwardActive = true
             showOsdBars(persistent = session.state != TransportState.PLAYING)
             showCenterMessage(
-                mainText = "⏩  ${OsdFormatter.formatSpeed(2.0f)}",
+                mainText = "▶▶  ${OsdFormatter.formatSpeed(2.0f)}",
                 subText = currentClockSummary(),
                 persistent = false,
             )
@@ -383,7 +399,7 @@ class PlayerActivity : AppCompatActivity() {
             if (session.setPlaybackSpeed(speedBeforeFastForward)) {
                 showOsdBars(persistent = session.state != TransportState.PLAYING)
                 showCenterMessage(
-                    mainText = "⏩  ${OsdFormatter.formatSpeed(speedBeforeFastForward)}",
+                    mainText = "▶▶  ${OsdFormatter.formatSpeed(speedBeforeFastForward)}",
                     subText = currentClockSummary(),
                     persistent = false,
                 )
@@ -394,7 +410,7 @@ class PlayerActivity : AppCompatActivity() {
                 session.stepPlaybackSpeed(faster = false)?.let { speed ->
                     showOsdBars(persistent = session.state != TransportState.PLAYING)
                     showCenterMessage(
-                        mainText = "⏩  ${OsdFormatter.formatSpeed(speed)}",
+                        mainText = "▶▶  ${OsdFormatter.formatSpeed(speed)}",
                         subText = currentClockSummary(),
                         persistent = false,
                     )
@@ -423,7 +439,7 @@ class PlayerActivity : AppCompatActivity() {
         pendingSeekMs = target
         session.seekTo(target)
 
-        val arrow = if (deltaMs >= 0) "⏩" else "⏪"
+        val arrow = if (deltaMs >= 0) "▶▶" else "◀◀"
         val deltaText = OsdFormatter.formatSeekDelta(deltaMs)
         val targetClock = OsdFormatter.formatClock(target)
         val durClock = if (duration > 0L) " / ${OsdFormatter.formatClock(duration)}" else ""
@@ -638,6 +654,12 @@ class PlayerActivity : AppCompatActivity() {
         if (!persistent) {
             ui.postDelayed(hideBars, BAR_TIMEOUT_MS)
         }
+    }
+
+    /** Fades the center pill out immediately (a no-op unless PLAYING). */
+    private fun hideCenterPillNow() {
+        ui.removeCallbacks(hideCenterPill)
+        hideCenterPill.run()
     }
 
     private fun showCenterMessage(mainText: String, subText: String, persistent: Boolean) {
