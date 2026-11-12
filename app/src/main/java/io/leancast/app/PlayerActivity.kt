@@ -34,12 +34,13 @@ import io.leancast.domain.cast.TransportState
  * - Top gradient bar: live status pill + video title
  * - Center glassmorphic pill: state (`|| Paused` / `▶ Playing`) or signed seek
  *   delta + target timestamp (`▶▶ +30s → 01:45`)
+ * - Loading spinner: faint ring + rotating 2/3 arc, center screen while loading
  * - Bottom gradient bar: elapsed/total time, high-contrast progress bar, and D-pad legend
  *
- * The initial playback screen shows nothing at all — no pill, no bars. The
- * progress screen (top/bottom bars) is summoned only by left/right (seek)
- * and the menu key, which toggles it; it auto-hides after 3 s of no
- * operation while playing.
+ * The initial playback screen shows nothing but the loading spinner until
+ * the first frames arrive. The progress screen (top/bottom bars) is
+ * summoned only by left/right (seek) and the menu key, which toggles it;
+ * it auto-hides after 3 s of no operation while playing.
  *
  * OSD icons use only glyphs the Android 6 system font ships (▶ ◀ ● and ASCII):
  * ⏸ ⏩ ⏪ ⏳ render as missing-glyph boxes on that TV, so never use them here.
@@ -59,6 +60,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var durationView: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var legendView: TextView
+    private lateinit var loadingSpinner: LoadingSpinnerView
 
     private val ui = Handler(Looper.getMainLooper())
     private val hideCenterPill = Runnable {
@@ -108,9 +110,6 @@ class PlayerActivity : AppCompatActivity() {
     /** Previous session state, so PLAYING can tell a resume from a fresh start. */
     private var lastSessionState: TransportState? = null
 
-    /** True once this activity has reached PLAYING; the initial load shows no prompts. */
-    private var playedOnce = false
-
     private val sessionListener = CastSession.Listener { state ->
         runOnUiThread {
             val previousState = lastSessionState
@@ -122,9 +121,13 @@ class PlayerActivity : AppCompatActivity() {
                 // follow-up launch for the new item was lost (the instance was
                 // already finishing) — the user saw the dashboard over audio.
                 TransportState.STOPPED -> goBackgroundAndFinish()
-                TransportState.NO_MEDIA_PRESENT -> scheduleIdleFinish()
+                TransportState.NO_MEDIA_PRESENT -> {
+                    hideLoadingSpinner()
+                    scheduleIdleFinish()
+                }
                 TransportState.PAUSED_PLAYBACK -> {
                     ui.removeCallbacks(finishIfStillIdle)
+                    hideLoadingSpinner()
                     attachPlayerIfMissing()
                     showImageIfAvailable()
                     showCenterMessage(
@@ -135,8 +138,8 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 TransportState.PLAYING -> {
                     pendingSeekMs = -1L
-                    playedOnce = true
                     ui.removeCallbacks(finishIfStillIdle)
+                    hideLoadingSpinner()
                     attachPlayerIfMissing()
                     showImageIfAvailable()
                     // If the progress screen is up (summoned by left/right
@@ -161,16 +164,9 @@ class PlayerActivity : AppCompatActivity() {
                     ui.removeCallbacks(finishIfStillIdle)
                     attachPlayerIfMissing()
                     showImageIfAvailable()
-                    // The initial load shows nothing at all; only a later
-                    // source switch (we have already played once) earns
-                    // the loading pill.
-                    if (playedOnce) {
-                        showCenterMessage(
-                            mainText = getString(R.string.osd_loading),
-                            subText = CastBus.session?.currentTitle ?: "",
-                            persistent = true,
-                        )
-                    }
+                    // Loading, initial or a source switch: just the
+                    // spinner, centered — no text pill, no bars.
+                    showLoadingSpinner()
                 }
             }
         }
@@ -233,6 +229,17 @@ class PlayerActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER,
             ),
+        )
+
+        // Loading spinner: a faint ring with a rotating 2/3 arc, centered
+        // on screen while the first frames load. Above the player, the
+        // image view and the center pill.
+        loadingSpinner = LoadingSpinnerView(this).apply {
+            visibility = View.GONE
+        }
+        root.addView(
+            loadingSpinner,
+            FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER),
         )
         root.addView(
             bottomBar,
@@ -671,6 +678,18 @@ class PlayerActivity : AppCompatActivity() {
     private fun hideCenterPillNow() {
         ui.removeCallbacks(hideCenterPill)
         hideCenterPill.run()
+    }
+
+    /** Shows the center loading spinner (initial load and source switches). */
+    private fun showLoadingSpinner() {
+        loadingSpinner.visibility = View.VISIBLE
+        loadingSpinner.start()
+    }
+
+    /** Hides the center loading spinner. */
+    private fun hideLoadingSpinner() {
+        loadingSpinner.stop()
+        loadingSpinner.visibility = View.GONE
     }
 
     /** Shows the "Speed Nx" center pill only — never the progress bars. */
