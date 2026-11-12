@@ -97,6 +97,10 @@ class CastSessionImageTest {
         session.play()
         session.onPlayerPrepared()
 
+        // setUri resets the speed to 1.0x (recorded in the port); the
+        // assertions below only care that the ignored calls add nothing.
+        port.speedHistory.clear()
+
         assertNull(session.stepPlaybackSpeed(faster = true))
         assertNull(session.cyclePlaybackSpeed())
         assertFalse(session.setPlaybackSpeed(2.0f))
