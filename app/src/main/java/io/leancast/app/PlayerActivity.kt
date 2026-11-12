@@ -34,7 +34,7 @@ import io.leancast.domain.cast.TransportState
  * - Top gradient bar: live status pill + video title
  * - Center glassmorphic pill: state (`|| Paused` / `▶ Playing`) or signed seek
  *   delta + target timestamp (`▶▶ +30s → 01:45`)
- * - Loading indicator: three dots bouncing in a dark pill, center screen while loading
+ * - Loading indicator: three white dots bouncing in sequence, center screen while loading
  * - Bottom gradient bar: elapsed/total time, high-contrast progress bar, and D-pad legend
  *
  * The initial playback screen shows nothing but the loading dots until
@@ -231,15 +231,15 @@ class PlayerActivity : AppCompatActivity() {
             ),
         )
 
-        // Loading indicator: three dots bouncing in sequence inside a
-        // dark pill, centered on screen while the first frames load.
+        // Loading indicator: three white dots bouncing in sequence, no
+        // background, centered on screen while the first frames load.
         // Above the player, the image view and the center pill.
         loadingSpinner = LoadingSpinnerView(this).apply {
             visibility = View.GONE
         }
         root.addView(
             loadingSpinner,
-            FrameLayout.LayoutParams(dp(96), dp(48), Gravity.CENTER),
+            FrameLayout.LayoutParams(dp(64), dp(28), Gravity.CENTER),
         )
         root.addView(
             bottomBar,

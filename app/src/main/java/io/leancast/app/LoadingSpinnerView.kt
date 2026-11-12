@@ -5,7 +5,6 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 import android.view.animation.LinearInterpolator
@@ -13,12 +12,11 @@ import kotlin.math.max
 import kotlin.math.sin
 
 /**
- * Minimal loading indicator: three dots in a row, bouncing up in sequence
- * like a wave, inside a dark rounded pill — the typing-indicator look,
- * adapted to the dark TV OSD (same pill fill and sky-blue outline as the
- * center pill). No text — just the dots, centered on screen while the
- * first frames load. Drawn by hand rather than using the platform's
- * indeterminate ProgressBar so it looks identical on every TV skin.
+ * Minimal loading indicator: three white dots in a row, bouncing up in
+ * sequence like a wave. No text, no background — just the dots, centered
+ * on screen while the first frames load. Drawn by hand rather than using
+ * the platform's indeterminate ProgressBar so it looks identical on
+ * every TV skin.
  */
 class LoadingSpinnerView @JvmOverloads constructor(
     context: Context,
@@ -28,25 +26,10 @@ class LoadingSpinnerView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
 
-    private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = Color.parseColor("#D90F172A")
-    }
-
-    private val pillStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = PILL_STROKE_DP * density
-        color = Color.parseColor("#38BDF8")
-    }
-
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = Color.WHITE
     }
-
-    /** Pill bounds and corner radius; the dots sit centered inside. */
-    private val pillRect = RectF()
-    private var cornerRadius = 0f
 
     /** Horizontal centers of the three dots, and their resting height. */
     private val dotCx = FloatArray(DOT_COUNT)
@@ -57,9 +40,6 @@ class LoadingSpinnerView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        val strokeHalf = pillStrokePaint.strokeWidth / 2f
-        pillRect.set(strokeHalf, strokeHalf, w - strokeHalf, h - strokeHalf)
-        cornerRadius = h / 2f
         val radius = DOT_RADIUS_DP * density
         val gap = DOT_GAP_DP * density
         val totalWidth = DOT_COUNT * 2 * radius + (DOT_COUNT - 1) * gap
@@ -69,15 +49,13 @@ class LoadingSpinnerView @JvmOverloads constructor(
             cx += 2 * radius + gap
         }
         // The dots' travel band (bounce + dot height) sits centered in
-        // the pill; the rest position is half a bounce below center.
+        // the view; the rest position is half a bounce below center.
         bounceAmplitude = BOUNCE_DP * density
         baselineCy = h / 2f + bounceAmplitude / 2f
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        canvas.drawRoundRect(pillRect, cornerRadius, cornerRadius, pillPaint)
-        canvas.drawRoundRect(pillRect, cornerRadius, cornerRadius, pillStrokePaint)
         val radius = DOT_RADIUS_DP * density
         for (i in 0 until DOT_COUNT) {
             // Each dot rises for half the cycle, staggered by a third of
@@ -124,9 +102,6 @@ class LoadingSpinnerView @JvmOverloads constructor(
 
         /** How high a dot rises at the peak of its bounce. */
         private const val BOUNCE_DP = 8f
-
-        /** Pill outline width, matching the center pill. */
-        private const val PILL_STROKE_DP = 2f
 
         /** One full wave per 1.2 s — calm, not frantic. */
         private const val CYCLE_MS = 1200L
