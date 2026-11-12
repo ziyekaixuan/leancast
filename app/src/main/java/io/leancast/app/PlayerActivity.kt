@@ -36,6 +36,11 @@ import io.leancast.domain.cast.TransportState
  *   delta + target timestamp (`▶▶ +30s → 01:45`)
  * - Bottom gradient bar: elapsed/total time, high-contrast progress bar, and D-pad legend
  *
+ * The initial playback screen shows nothing at all — no pill, no bars. The
+ * progress screen (top/bottom bars) is summoned only by left/right (seek)
+ * and the menu key, which toggles it; it auto-hides after 3 s of no
+ * operation while playing.
+ *
  * OSD icons use only glyphs the Android 6 system font ships (▶ ◀ ● and ASCII):
  * ⏸ ⏩ ⏪ ⏳ render as missing-glyph boxes on that TV, so never use them here.
  */
@@ -103,6 +108,9 @@ class PlayerActivity : AppCompatActivity() {
     /** Previous session state, so PLAYING can tell a resume from a fresh start. */
     private var lastSessionState: TransportState? = null
 
+    /** True once this activity has reached PLAYING; the initial load shows no prompts. */
+    private var playedOnce = false
+
     private val sessionListener = CastSession.Listener { state ->
         runOnUiThread {
             val previousState = lastSessionState
@@ -127,9 +135,14 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 TransportState.PLAYING -> {
                     pendingSeekMs = -1L
+                    playedOnce = true
                     ui.removeCallbacks(finishIfStillIdle)
                     attachPlayerIfMissing()
                     showImageIfAvailable()
+                    // If the progress screen is up (summoned by left/right
+                    // or menu before a pause), re-arm its auto-hide on
+                    // resume so it does not stick; this never summons it.
+                    if (isOsdVisible()) showOsdBars(persistent = false)
                     // A fresh cast reaches PLAYING from TRANSITIONING: the
                     // "resume" pill would be noise at 00:00, so just clear
                     // the loading pill. Only a resume from PAUSED_PLAYBACK
@@ -148,11 +161,16 @@ class PlayerActivity : AppCompatActivity() {
                     ui.removeCallbacks(finishIfStillIdle)
                     attachPlayerIfMissing()
                     showImageIfAvailable()
-                    showCenterMessage(
-                        mainText = getString(R.string.osd_loading),
-                        subText = CastBus.session?.currentTitle ?: "",
-                        persistent = true,
-                    )
+                    // The initial load shows nothing at all; only a later
+                    // source switch (we have already played once) earns
+                    // the loading pill.
+                    if (playedOnce) {
+                        showCenterMessage(
+                            mainText = getString(R.string.osd_loading),
+                            subText = CastBus.session?.currentTitle ?: "",
+                            persistent = true,
+                        )
+                    }
                 }
             }
         }
@@ -310,7 +328,10 @@ class PlayerActivity : AppCompatActivity() {
                 true
             }
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> {
-                showOsdBars(persistent = session.state != TransportState.PLAYING)
+                // Menu toggles the progress screen: show it when hidden,
+                // hide it when already on screen.
+                if (isOsdVisible()) hideOsdBarsNow()
+                else showOsdBars(persistent = session.state != TransportState.PLAYING)
                 true
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
@@ -630,6 +651,20 @@ class PlayerActivity : AppCompatActivity() {
         if (!persistent) {
             ui.postDelayed(hideBars, BAR_TIMEOUT_MS)
         }
+    }
+
+    /** True while the top/bottom OSD bars are on screen (they show/hide together). */
+    private fun isOsdVisible(): Boolean = topBar.visibility == View.VISIBLE
+
+    /** Hides the OSD bars immediately, cancelling any pending auto-hide. */
+    private fun hideOsdBarsNow() {
+        ui.removeCallbacks(hideBars)
+        topBar.animate().cancel()
+        bottomBar.animate().cancel()
+        topBar.alpha = 1f
+        bottomBar.alpha = 1f
+        topBar.visibility = View.GONE
+        bottomBar.visibility = View.GONE
     }
 
     /** Fades the center pill out immediately (a no-op unless PLAYING). */

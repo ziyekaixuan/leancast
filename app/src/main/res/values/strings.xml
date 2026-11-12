@@ -65,7 +65,7 @@
     <string name="osd_loading">●  Buffering…</string>
     <string name="osd_speed">Speed %1$s</string>
     <string name="osd_live">● LIVE</string>
-    <string name="osd_legend">OK Play / Pause    ·    ◀ ▶ Seek (Hold to Accelerate)    ·    ▲ 1.0x (Hold 2x)    ·    ▼ Cycle Speed    ·    Menu Info    ·    Back Exit</string>
-    <string name="osd_legend_live">OK Play / Pause    ·    Menu Info    ·    Back Exit</string>
-    <string name="osd_legend_image">Menu Show Info    ·    Back Exit</string>
+    <string name="osd_legend">OK Play / Pause    ·    ◀ ▶ Seek (Hold to Accelerate)    ·    ▲ 1.0x (Hold 2x)    ·    ▼ Cycle Speed    ·    Menu Toggle Info    ·    Back Exit</string>
+    <string name="osd_legend_live">OK Play / Pause    ·    Menu Toggle Info    ·    Back Exit</string>
+    <string name="osd_legend_image">Menu Toggle Info    ·    Back Exit</string>
 </resources>
