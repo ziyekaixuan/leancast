@@ -2,6 +2,8 @@ package io.leancast.domain.cast
 
 import io.leancast.domain.upnp.MimeInference
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -43,5 +45,25 @@ class MimeInferenceTest {
         assertEquals(null, MimeInference.guessMimeType("http://192.168.31.15:8000/e2e.mp4"))
         assertEquals(null, MimeInference.guessMimeType("http://x.example/v.flv"))
         assertEquals(null, MimeInference.guessMimeType("https://x.example/stream"))
+    }
+
+    @Test
+    fun `image by extension, case-insensitive, query and fragment ignored`() {
+        assertTrue(MimeInference.isImageUri("http://192.168.1.5:8080/IMG_1234.JPG"))
+        assertTrue(MimeInference.isImageUri("http://192.168.1.5:8080/photo.jpeg?size=large"))
+        assertTrue(MimeInference.isImageUri("http://192.168.1.5:8080/pic.png#frag"))
+        assertTrue(MimeInference.isImageUri("http://192.168.1.5:8080/a.webp"))
+        assertTrue(MimeInference.isImageUri("http://192.168.1.5:8080/a.gif"))
+        assertTrue(MimeInference.isImageUri("http://192.168.1.5:8080/a.bmp"))
+    }
+
+    @Test
+    fun `non-image uris are not images`() {
+        assertFalse(MimeInference.isImageUri("http://192.168.1.5:8080/video.mp4"))
+        assertFalse(MimeInference.isImageUri("http://192.168.1.5:8080/photo"))
+        assertFalse(MimeInference.isImageUri("http://192.168.1.5:8080/a.jpg/123"))
+        assertFalse(MimeInference.isImageUri("http://192.168.1.5:8080/a.heic"))
+        assertFalse(MimeInference.isImageUri(null))
+        assertFalse(MimeInference.isImageUri(""))
     }
 }

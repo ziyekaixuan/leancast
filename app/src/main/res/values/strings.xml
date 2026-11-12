@@ -66,4 +66,5 @@
     <string name="osd_live">● LIVE</string>
     <string name="osd_legend">OK Play / Pause    ·    ◀ ▶ Seek (Hold to Fast-Forward)    ·    ▼ Speed    ·    Back Exit</string>
     <string name="osd_legend_live">OK Play / Pause    ·    Back Exit</string>
+    <string name="osd_legend_image">Up Show Info    ·    Back Exit</string>
 </resources>

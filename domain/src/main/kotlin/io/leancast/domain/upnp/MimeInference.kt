@@ -11,6 +11,8 @@ object MimeInference {
     const val HLS: String = "application/vnd.apple.mpegurl"
     const val DASH: String = "application/dash+xml"
 
+    private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")
+
     fun guessMimeType(uri: String?): String? {
         if (uri == null) return null
         return when {
@@ -19,5 +21,17 @@ object MimeInference {
             uri.contains(".mpd", ignoreCase = true) -> DASH
             else -> null
         }
+    }
+
+    /**
+     * True when the URI's path (query and fragment stripped) ends in a
+     * still-image extension the platform decoder can handle. HEIC/HEIF are
+     * deliberately absent: BitmapFactory cannot decode them before API 28.
+     */
+    fun isImageUri(uri: String?): Boolean {
+        if (uri.isNullOrBlank()) return false
+        val path = uri.substringBefore('?').substringBefore('#')
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return ext in IMAGE_EXTENSIONS
     }
 }

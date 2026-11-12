@@ -1,6 +1,7 @@
 package io.leancast.domain.cast
 
 import io.leancast.domain.upnp.DidlParser
+import io.leancast.domain.upnp.MimeInference
 
 /** UPnP AV transport states. */
 enum class TransportState { NO_MEDIA_PRESENT, TRANSITIONING, PLAYING, PAUSED_PLAYBACK, STOPPED }
@@ -14,6 +15,14 @@ interface PlayerPort {
     fun stop()
     fun currentPositionMs(): Long
     fun currentDurationMs(): Long
+
+    /**
+     * Displays a still image (photo cast). Default no-op so players without
+     * image support keep compiling; the device port overrides it. The
+     * implementation must call [CastSession.onPlayerPrepared] once the image
+     * is on screen, or [CastSession.onPlayerError] if it cannot be shown.
+     */
+    fun showImage(uri: String) = Unit
 
     /**
      * True when the current item is a live stream. For live items the player's
@@ -55,6 +64,8 @@ class CastSession(
         private set
     var currentMetaData: String? = null
         private set
+    var currentMimeType: String? = null
+        private set
     var volume: Int = 100
         private set
     var playbackSpeed: Float = PlaybackSpeedPolicy.DEFAULT_SPEED
@@ -66,6 +77,16 @@ class CastSession(
 
     /** True when the current item is a live stream; see [durationMs]. */
     fun isLive(): Boolean = port.isLive()
+
+    /**
+     * True when the current item is a still image (photo cast). The DIDL MIME
+     * type wins when present; otherwise the URI extension decides.
+     */
+    fun isImage(): Boolean {
+        val mime = currentMimeType
+        if (mime != null) return mime.startsWith("image/", ignoreCase = true)
+        return MimeInference.isImageUri(currentUri)
+    }
 
     fun addListener(l: Listener) {
         listeners += l
@@ -87,6 +108,7 @@ class CastSession(
         currentUri = uri?.takeIf { it.isNotBlank() }
         currentMetaData = currentUri?.let { metaData }
         currentTitle = currentMetaData?.let { DidlParser.extractTitle(it) }
+        currentMimeType = currentMetaData?.let { DidlParser.extractMimeType(it) }
         resetPlaybackSpeed()
         resetElapsed()
         enter(TransportState.NO_MEDIA_PRESENT)
@@ -103,7 +125,7 @@ class CastSession(
             TransportState.PLAYING, TransportState.TRANSITIONING -> Unit
             else -> {
                 val uri = currentUri ?: return
-                port.prepareAndPlay(uri)
+                if (isImage()) port.showImage(uri) else port.prepareAndPlay(uri)
                 resetElapsed()
                 markElapsedRunning()
                 enter(TransportState.TRANSITIONING)
@@ -143,8 +165,8 @@ class CastSession(
 
     fun seekTo(ms: Long) {
         // A live stream has no meaningful absolute position; seeking into the
-        // window would just force a rebuffer.
-        if (isLive()) return
+        // window would just force a rebuffer. A still image has no timeline.
+        if (isLive() || isImage()) return
         when (state) {
             TransportState.PLAYING, TransportState.PAUSED_PLAYBACK, TransportState.TRANSITIONING ->
                 port.seekTo(ms)
@@ -193,7 +215,7 @@ class CastSession(
     }
 
     private fun canAdjustSpeed(): Boolean {
-        if (isLive()) return false
+        if (isLive() || isImage()) return false
         return when (state) {
             TransportState.PLAYING, TransportState.PAUSED_PLAYBACK, TransportState.TRANSITIONING -> true
             else -> false

@@ -93,6 +93,32 @@ class SoapParserTest {
         assertEquals("Big Buck Bunny", DidlParser.extractTitle(withTitle))
     }
 
+    @Test
+    fun `extractMimeType reads the res protocolInfo mime`() {
+        val didl = "<DIDL-Lite><item><dc:title>IMG_1</dc:title>" +
+            "<res protocolInfo=\"http-get:*:image/jpeg:DLNA.ORG_OP=01\">http://192.168.1.5:8080/IMG_1.jpg</res>" +
+            "</item></DIDL-Lite>"
+        assertEquals("image/jpeg", DidlParser.extractMimeType(didl))
+    }
+
+    @Test
+    fun `extractMimeType returns video mime and null when absent or malformed`() {
+        val video = "<DIDL-Lite><item>" +
+            "<res protocolInfo=\"http-get:*:video/mp4:DLNA.ORG_OP=01\">http://x/v.mp4</res>" +
+            "</item></DIDL-Lite>"
+        assertEquals("video/mp4", DidlParser.extractMimeType(video))
+
+        val noRes = "<DIDL-Lite><item><dc:title>No res</dc:title></item></DIDL-Lite>"
+        assertNull(DidlParser.extractMimeType(noRes))
+
+        val noProtocolInfo = "<DIDL-Lite><item><res>http://x/v.mp4</res></item></DIDL-Lite>"
+        assertNull(DidlParser.extractMimeType(noProtocolInfo))
+
+        assertNull(DidlParser.extractMimeType(null))
+        assertNull(DidlParser.extractMimeType(""))
+        assertNull(DidlParser.extractMimeType("not xml at all"))
+    }
+
     private fun playBody() = soapBody(
         "Play",
         "urn:schemas-upnp-org:service:AVTransport:1",

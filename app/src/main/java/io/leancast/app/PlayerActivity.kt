@@ -17,6 +17,7 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -38,6 +39,7 @@ import io.leancast.domain.cast.TransportState
 class PlayerActivity : AppCompatActivity() {
 
     private lateinit var playerView: PlayerView
+    private lateinit var imageView: ImageView
     private lateinit var topBar: LinearLayout
     private lateinit var topTitleView: TextView
     private lateinit var topBadgeView: TextView
@@ -108,6 +110,7 @@ class PlayerActivity : AppCompatActivity() {
                 TransportState.PAUSED_PLAYBACK -> {
                     ui.removeCallbacks(finishIfStillIdle)
                     attachPlayerIfMissing()
+                    showImageIfAvailable()
                     showOsdBars(persistent = true)
                     showCenterMessage(
                         mainText = getString(R.string.osd_paused),
@@ -119,6 +122,7 @@ class PlayerActivity : AppCompatActivity() {
                     pendingSeekMs = -1L
                     ui.removeCallbacks(finishIfStillIdle)
                     attachPlayerIfMissing()
+                    showImageIfAvailable()
                     showOsdBars(persistent = false)
                     showCenterMessage(
                         mainText = getString(R.string.osd_playing),
@@ -129,6 +133,7 @@ class PlayerActivity : AppCompatActivity() {
                 TransportState.TRANSITIONING -> {
                     ui.removeCallbacks(finishIfStillIdle)
                     attachPlayerIfMissing()
+                    showImageIfAvailable()
                     showOsdBars(persistent = true)
                     showCenterMessage(
                         mainText = getString(R.string.osd_loading),
@@ -162,6 +167,21 @@ class PlayerActivity : AppCompatActivity() {
             isFocusable = false
         }
         root.addView(playerView)
+
+        // Photo casts: ExoPlayer cannot render still images, so the port
+        // decodes the bitmap and this view shows it (above the PlayerView).
+        // Opaque black background: without it, the letterbox areas would show
+        // the previous video's last frame through the transparent view.
+        imageView = ImageView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(Color.BLACK)
+            visibility = View.GONE
+        }
+        root.addView(imageView)
 
         topBar = buildTopBar()
         centerPill = buildCenterPill()
@@ -206,6 +226,7 @@ class PlayerActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         attachPlayerIfMissing()
+        showImageIfAvailable()
         ui.post(tickProgress)
     }
 
@@ -229,6 +250,24 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Shows the current still image (photo cast) when the port has one decoded,
+     * hides the view otherwise (video, or the image still loading). Called from
+     * onStart and on every state change, so it also covers the race where the
+     * image finished loading before this activity launched.
+     */
+    private fun showImageIfAvailable() {
+        val session = CastBus.session
+        val bitmap = CastBus.port?.currentImage
+        if (session?.isImage() == true && bitmap != null) {
+            imageView.setImageBitmap(bitmap)
+            imageView.visibility = View.VISIBLE
+        } else {
+            imageView.setImageBitmap(null)
+            imageView.visibility = View.GONE
+        }
+    }
+
     /** Defers the teardown so an immediate re-cast can keep this activity alive. */
     private fun scheduleIdleFinish() {
         ui.removeCallbacks(finishIfStillIdle)
@@ -237,6 +276,7 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onStop() {
         ui.removeCallbacks(tickProgress)
+        imageView.setImageBitmap(null)
         CastBus.port?.setViewAttached(false)
         playerView.player = null
         // Hand the player back its offscreen surface so playback keeps
@@ -262,7 +302,7 @@ class PlayerActivity : AppCompatActivity() {
                 true
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if ((event?.repeatCount ?: 0) == 0 && !session.isLive()) {
+                if ((event?.repeatCount ?: 0) == 0 && !session.isLive() && !session.isImage()) {
                     session.stepPlaybackSpeed(faster = true)?.let { speed ->
                         showOsdBars(persistent = session.state != TransportState.PLAYING)
                         showCenterMessage(
@@ -275,14 +315,14 @@ class PlayerActivity : AppCompatActivity() {
                 true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                if (session.isLive()) true
+                if (session.isLive() || session.isImage()) true
                 else {
                     seekBy(SeekStepPolicy.stepFor(event?.repeatCount ?: 0, forward = true))
                     true
                 }
             }
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                if (session.isLive()) true
+                if (session.isLive() || session.isImage()) true
                 else {
                     seekBy(SeekStepPolicy.stepFor(event?.repeatCount ?: 0, forward = false))
                     true
@@ -311,7 +351,7 @@ class PlayerActivity : AppCompatActivity() {
     private val enterFastForward = Runnable {
         if (!upHeld || fastForwardActive) return@Runnable
         val session = CastBus.session ?: return@Runnable
-        if (session.isLive()) return@Runnable
+        if (session.isLive() || session.isImage()) return@Runnable
         speedBeforeFastForward = session.playbackSpeed
         if (session.setPlaybackSpeed(2.0f)) {
             fastForwardActive = true
@@ -348,7 +388,7 @@ class PlayerActivity : AppCompatActivity() {
                     persistent = false,
                 )
             }
-        } else if (!session.isLive()) {
+        } else if (!session.isLive() && !session.isImage()) {
             val heldMs = (event?.eventTime ?: 0L) - upDownAtMs
             if (heldMs < ViewConfiguration.getLongPressTimeout()) {
                 session.stepPlaybackSpeed(faster = false)?.let { speed ->
@@ -563,6 +603,12 @@ class PlayerActivity : AppCompatActivity() {
             progressBar.visibility = View.GONE
             // Seek keys are ignored on live, so do not advertise them.
             legendView.text = getString(R.string.osd_legend_live)
+        } else if (session.isImage()) {
+            // A still image has no timeline; hide the bar and the clock.
+            elapsedView.text = ""
+            durationView.text = ""
+            progressBar.visibility = View.GONE
+            legendView.text = getString(R.string.osd_legend_image)
         } else {
             durationView.text = OsdFormatter.formatClock(dur)
             progressBar.visibility = View.VISIBLE
@@ -573,6 +619,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun currentClockSummary(): String {
         val session = CastBus.session ?: return ""
+        if (session.isImage()) return ""
         val pos = OsdFormatter.formatClock(session.positionMs())
         if (session.isLive()) return "$pos · ${getString(R.string.osd_live)}"
         val dur = OsdFormatter.formatClock(session.durationMs())

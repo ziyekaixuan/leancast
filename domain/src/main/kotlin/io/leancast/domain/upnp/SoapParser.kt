@@ -137,6 +137,37 @@ object DidlParser {
     }
 
     /**
+     * Extracts the MIME type from the `<res protocolInfo="...">` attribute
+     * (`http-get:*:image/jpeg:DLNA.ORG_OP=01` -> `image/jpeg`); null when
+     * absent or malformed. Senders that serve photos usually declare it, which
+     * is more reliable than guessing from the URI (some photo URLs carry no
+     * extension).
+     */
+    fun extractMimeType(metadata: String?): String? {
+        if (metadata.isNullOrBlank()) return null
+        return try {
+            val parser = XmlPullParserFactory.newInstance().newPullParser()
+            parser.setInput(StringReader(metadata))
+            while (parser.next() != XmlPullParser.END_DOCUMENT) {
+                if (parser.eventType != XmlPullParser.START_TAG || parser.name != "res") continue
+                var protocolInfo: String? = null
+                for (i in 0 until parser.attributeCount) {
+                    if (parser.getAttributeName(i) == "protocolInfo") {
+                        protocolInfo = parser.getAttributeValue(i)
+                        break
+                    }
+                }
+                // protocolInfo is `protocol:network:mime-type:additional-info`.
+                val mime = protocolInfo?.split(":", limit = 4)?.getOrNull(2)?.trim()
+                if (!mime.isNullOrBlank() && mime.contains('/')) return mime
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * `dc:title` may arrive with a declared namespace or an undeclared `dc:` prefix,
      * so accept either while rejecting other title-like elements with a foreign ns.
      */
