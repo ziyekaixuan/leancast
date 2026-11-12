@@ -31,7 +31,7 @@ import io.leancast.domain.cast.TransportState
 
 /**
  * Fullscreen playback surface with a dedicated 10-foot Android TV OSD:
- * - Top gradient bar: live status pill + video title + current-speed badge (hidden at 1.0x)
+ * - Top gradient bar: live status pill + video title
  * - Center glassmorphic pill: state (`|| Paused` / `▶ Playing`) or signed seek
  *   delta + target timestamp (`▶▶ +30s → 01:45`)
  * - Bottom gradient bar: elapsed/total time, high-contrast progress bar, and D-pad legend
@@ -46,7 +46,6 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var topBar: LinearLayout
     private lateinit var topTitleView: TextView
     private lateinit var topBadgeView: TextView
-    private lateinit var topSpeedView: TextView
     private lateinit var centerPill: LinearLayout
     private lateinit var centerPillTitle: TextView
     private lateinit var centerPillSub: TextView
@@ -120,7 +119,6 @@ class PlayerActivity : AppCompatActivity() {
                     ui.removeCallbacks(finishIfStillIdle)
                     attachPlayerIfMissing()
                     showImageIfAvailable()
-                    showOsdBars(persistent = true)
                     showCenterMessage(
                         mainText = getString(R.string.osd_paused),
                         subText = currentClockSummary(),
@@ -132,7 +130,6 @@ class PlayerActivity : AppCompatActivity() {
                     ui.removeCallbacks(finishIfStillIdle)
                     attachPlayerIfMissing()
                     showImageIfAvailable()
-                    showOsdBars(persistent = false)
                     // A fresh cast reaches PLAYING from TRANSITIONING: the
                     // "resume" pill would be noise at 00:00, so just clear
                     // the loading pill. Only a resume from PAUSED_PLAYBACK
@@ -151,7 +148,6 @@ class PlayerActivity : AppCompatActivity() {
                     ui.removeCallbacks(finishIfStillIdle)
                     attachPlayerIfMissing()
                     showImageIfAvailable()
-                    showOsdBars(persistent = true)
                     showCenterMessage(
                         mainText = getString(R.string.osd_loading),
                         subText = CastBus.session?.currentTitle ?: "",
@@ -231,7 +227,6 @@ class PlayerActivity : AppCompatActivity() {
 
         setContentView(root)
         CastBus.session?.addListener(sessionListener)
-        showOsdBars(persistent = false)
     }
 
     override fun onDestroy() {
@@ -320,16 +315,9 @@ class PlayerActivity : AppCompatActivity() {
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
                 if ((event?.repeatCount ?: 0) == 0 && !session.isLive() && !session.isImage()) {
-                    // Two-stage: a first press only brings up the progress
-                    // screen; speed steps happen while it is visible.
-                    if (!isOsdVisible()) {
-                        showOsdBars(persistent = session.state != TransportState.PLAYING)
-                    } else {
-                        session.stepPlaybackSpeed(faster = true)?.let { showSpeedPill(it) }
-                            // Already at the fastest step: still confirm the
-                            // current speed so the press is not a dead key.
-                            ?: showSpeedPill(session.playbackSpeed)
-                    }
+                    // Down cycles the speed 1.0 -> 1.25 -> 1.5 -> 1.75 -> 2.0
+                    // -> 1.0, with a center prompt and no progress bars.
+                    session.cyclePlaybackSpeed()?.let { showSpeedPill(it) }
                 }
                 true
             }
@@ -356,24 +344,21 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     /**
-     * D-pad up, two-stage: a short tap first brings up the progress screen,
-     * and only taps while it is visible step the speed down one notch;
-     * holding it past the long-press timeout plays at 2x until release (no
-     * OSD gate on the hold), then restores the speed from before the hold.
-     * A posted runnable (not key repeats) detects the hold, so remotes that
-     * send no repeats work too. Live streams and images keep the old
-     * behaviour (up just shows the OSD).
+     * D-pad up: a short tap restores 1.0x; holding it past the long-press
+     * timeout plays at 2x until release, then restores 1.0x. Both show only
+     * a center speed prompt — never the progress bars, which only the
+     * left/right and menu keys summon. A posted runnable (not key repeats)
+     * detects the hold, so remotes that send no repeats work too. Live
+     * streams and images ignore up/down (no speed to change).
      */
     private var upDownAtMs = 0L
     private var upHeld = false
     private var fastForwardActive = false
-    private var speedBeforeFastForward = PlaybackSpeedPolicy.DEFAULT_SPEED
 
     private val enterFastForward = Runnable {
         if (!upHeld || fastForwardActive) return@Runnable
         val session = CastBus.session ?: return@Runnable
         if (session.isLive() || session.isImage()) return@Runnable
-        speedBeforeFastForward = session.playbackSpeed
         if (session.setPlaybackSpeed(2.0f)) {
             fastForwardActive = true
             showSpeedPill(2.0f)
@@ -394,28 +379,21 @@ class PlayerActivity : AppCompatActivity() {
         upHeld = false
         ui.removeCallbacks(enterFastForward)
         val session = CastBus.session ?: return true
+        if (session.isLive() || session.isImage()) return true
         if (fastForwardActive) {
+            // Held past the timeout: release always restores 1.0x.
             fastForwardActive = false
-            if (session.setPlaybackSpeed(speedBeforeFastForward)) {
-                showSpeedPill(speedBeforeFastForward)
-            }
-        } else if (!session.isLive() && !session.isImage()) {
-            val heldMs = (event?.eventTime ?: 0L) - upDownAtMs
-            if (heldMs < ViewConfiguration.getLongPressTimeout()) {
-                // Two-stage, like DPAD_DOWN: a first tap only brings up the
-                // progress screen; speed steps happen while it is visible.
-                // The long-press 2x path above is exempt from the gate.
-                if (!isOsdVisible()) {
-                    showOsdBars(persistent = session.state != TransportState.PLAYING)
-                } else {
-                    session.stepPlaybackSpeed(faster = false)?.let { showSpeedPill(it) }
-                        // Already at the slowest step: still confirm the
-                        // current speed so the press is not a dead key.
-                        ?: showSpeedPill(session.playbackSpeed)
-                }
+            if (session.setPlaybackSpeed(PlaybackSpeedPolicy.DEFAULT_SPEED)) {
+                showSpeedPill(PlaybackSpeedPolicy.DEFAULT_SPEED)
             }
         } else {
-            showOsdBars(persistent = session.state != TransportState.PLAYING)
+            val heldMs = (event?.eventTime ?: 0L) - upDownAtMs
+            if (heldMs < ViewConfiguration.getLongPressTimeout()) {
+                // Short tap: restore 1.0x, with a center prompt only.
+                if (session.setPlaybackSpeed(PlaybackSpeedPolicy.DEFAULT_SPEED)) {
+                    showSpeedPill(PlaybackSpeedPolicy.DEFAULT_SPEED)
+                }
+            }
         }
         return true
     }
@@ -487,23 +465,6 @@ class PlayerActivity : AppCompatActivity() {
             ellipsize = TextUtils.TruncateAt.END
         }
         bar.addView(topTitleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-        // Current playback speed, shown only while it differs from 1.0x.
-        topSpeedView = TextView(this).apply {
-            setTextColor(Color.parseColor("#F8FAFC"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(10), dp(4), dp(10), dp(4))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(999).toFloat()
-                setColor(Color.parseColor("#334155"))
-            }
-            visibility = View.GONE
-        }
-        bar.addView(topSpeedView, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).apply { leftMargin = dp(14) })
         return bar
     }
 
@@ -626,18 +587,6 @@ class PlayerActivity : AppCompatActivity() {
             pendingSeekMs = -1L
         }
         topTitleView.text = session.currentTitle?.takeIf { it.isNotBlank() } ?: getString(R.string.app_name)
-        // Current speed, shown in the top bar only while it differs from
-        // normal speed; at 1.0x there is nothing to say. Live streams and
-        // images never change speed, so the badge stays hidden for them.
-        val speed = session.playbackSpeed
-        if (!live && !session.isImage() &&
-            kotlin.math.abs(speed - PlaybackSpeedPolicy.DEFAULT_SPEED) >= 0.001f
-        ) {
-            topSpeedView.text = OsdFormatter.formatSpeed(speed)
-            topSpeedView.visibility = View.VISIBLE
-        } else {
-            topSpeedView.visibility = View.GONE
-        }
         elapsedView.text = OsdFormatter.formatClock(pos)
         if (live) {
             // A live stream has no duration to fill a bar with; show the label
@@ -689,15 +638,11 @@ class PlayerActivity : AppCompatActivity() {
         hideCenterPill.run()
     }
 
-    /** True while the top/bottom OSD bars are on screen (they show/hide together). */
-    private fun isOsdVisible(): Boolean = topBar.visibility == View.VISIBLE
-
-    /** Shows the OSD bars plus the "Speed Nx" center pill for [speed]. */
+    /** Shows the "Speed Nx" center pill only — never the progress bars. */
     private fun showSpeedPill(speed: Float) {
-        showOsdBars(persistent = CastBus.session?.state != TransportState.PLAYING)
         showCenterMessage(
             mainText = getString(R.string.osd_speed, OsdFormatter.formatSpeed(speed)),
-            subText = currentClockSummary(),
+            subText = "",
             persistent = false,
         )
     }

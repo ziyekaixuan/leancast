@@ -45,7 +45,7 @@ object OsdFormatter {
     }
 
     /**
-     * Renders a playback speed multiplier as `0.75x`, `1.0x`, `1.25x`, `1.5x`, `2.0x`.
+     * Renders a playback speed multiplier as `1.0x`, `1.25x`, `1.5x`, `1.75x`, `2.0x`.
      */
     fun formatSpeed(speed: Float): String {
         val scaled = kotlin.math.round(speed * 100f).toInt()

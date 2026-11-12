@@ -31,13 +31,13 @@ class PlaybackSpeedTest {
     }
 
     @Test
-    fun `policy cycles 1_0 to 1_25 to 1_5 to 2_0 to 0_75 and back to 1_0`() {
+    fun `policy cycles 1_0 to 1_25 to 1_5 to 1_75 to 2_0 and back to 1_0`() {
         var speed = PlaybackSpeedPolicy.DEFAULT_SPEED
         val visited = (1..5).map {
             speed = PlaybackSpeedPolicy.nextSpeed(speed)
             speed
         }
-        assertEquals(listOf(1.25f, 1.5f, 2.0f, 0.75f, 1.0f), visited)
+        assertEquals(listOf(1.25f, 1.5f, 1.75f, 2.0f, 1.0f), visited)
     }
 
     @Test
@@ -52,8 +52,8 @@ class PlaybackSpeedTest {
         assertEquals(1.25f, session.cyclePlaybackSpeed() ?: -1f, 0.001f)
         assertEquals(1.25f, port.appliedSpeed, 0.001f)
         assertEquals(1.5f, session.cyclePlaybackSpeed() ?: -1f, 0.001f)
+        assertEquals(1.75f, session.cyclePlaybackSpeed() ?: -1f, 0.001f)
         assertEquals(2.0f, session.cyclePlaybackSpeed() ?: -1f, 0.001f)
-        assertEquals(0.75f, session.cyclePlaybackSpeed() ?: -1f, 0.001f)
         assertEquals(1.0f, session.cyclePlaybackSpeed() ?: -1f, 0.001f)
         assertEquals(1.0f, port.appliedSpeed, 0.001f)
     }
@@ -110,17 +110,18 @@ class PlaybackSpeedTest {
 
         assertEquals(1.25f, session.stepPlaybackSpeed(faster = true) ?: -1f, 0.001f)
         assertEquals(1.5f, session.stepPlaybackSpeed(faster = true) ?: -1f, 0.001f)
+        assertEquals(1.75f, session.stepPlaybackSpeed(faster = true) ?: -1f, 0.001f)
         assertEquals(2.0f, session.stepPlaybackSpeed(faster = true) ?: -1f, 0.001f)
         assertNull(session.stepPlaybackSpeed(faster = true))
         assertEquals(2.0f, session.playbackSpeed, 0.001f)
 
+        assertEquals(1.75f, session.stepPlaybackSpeed(faster = false) ?: -1f, 0.001f)
         assertEquals(1.5f, session.stepPlaybackSpeed(faster = false) ?: -1f, 0.001f)
         assertEquals(1.25f, session.stepPlaybackSpeed(faster = false) ?: -1f, 0.001f)
         assertEquals(1.0f, session.stepPlaybackSpeed(faster = false) ?: -1f, 0.001f)
-        assertEquals(0.75f, session.stepPlaybackSpeed(faster = false) ?: -1f, 0.001f)
         assertNull(session.stepPlaybackSpeed(faster = false))
-        assertEquals(0.75f, session.playbackSpeed, 0.001f)
-        assertEquals(0.75f, port.appliedSpeed, 0.001f)
+        assertEquals(1.0f, session.playbackSpeed, 0.001f)
+        assertEquals(1.0f, port.appliedSpeed, 0.001f)
     }
 
     @Test

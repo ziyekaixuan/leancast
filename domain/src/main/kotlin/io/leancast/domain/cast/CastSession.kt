@@ -31,7 +31,7 @@ interface PlayerPort {
      */
     fun isLive(): Boolean = false
 
-    /** Applies [speed] (e.g. `0.75f`..`2.0f`) with pitch correction enabled. */
+    /** Applies [speed] (e.g. `1.0f`..`2.0f`) with pitch correction enabled. */
     fun setPlaybackSpeed(speed: Float) = Unit
 }
 
