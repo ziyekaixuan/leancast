@@ -31,7 +31,7 @@ import io.leancast.domain.cast.TransportState
 
 /**
  * Fullscreen playback surface with a dedicated 10-foot Android TV OSD:
- * - Top gradient bar: live status pill + video title
+ * - Top gradient bar: live status pill + video title + current-speed badge (hidden at 1.0x)
  * - Center glassmorphic pill: state (`|| Paused` / `▶ Playing`) or signed seek
  *   delta + target timestamp (`▶▶ +30s → 01:45`)
  * - Bottom gradient bar: elapsed/total time, high-contrast progress bar, and D-pad legend
@@ -46,6 +46,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var topBar: LinearLayout
     private lateinit var topTitleView: TextView
     private lateinit var topBadgeView: TextView
+    private lateinit var topSpeedView: TextView
     private lateinit var centerPill: LinearLayout
     private lateinit var centerPillTitle: TextView
     private lateinit var centerPillSub: TextView
@@ -486,6 +487,23 @@ class PlayerActivity : AppCompatActivity() {
             ellipsize = TextUtils.TruncateAt.END
         }
         bar.addView(topTitleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        // Current playback speed, shown only while it differs from 1.0x.
+        topSpeedView = TextView(this).apply {
+            setTextColor(Color.parseColor("#F8FAFC"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(999).toFloat()
+                setColor(Color.parseColor("#334155"))
+            }
+            visibility = View.GONE
+        }
+        bar.addView(topSpeedView, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { leftMargin = dp(14) })
         return bar
     }
 
@@ -608,6 +626,18 @@ class PlayerActivity : AppCompatActivity() {
             pendingSeekMs = -1L
         }
         topTitleView.text = session.currentTitle?.takeIf { it.isNotBlank() } ?: getString(R.string.app_name)
+        // Current speed, shown in the top bar only while it differs from
+        // normal speed; at 1.0x there is nothing to say. Live streams and
+        // images never change speed, so the badge stays hidden for them.
+        val speed = session.playbackSpeed
+        if (!live && !session.isImage() &&
+            kotlin.math.abs(speed - PlaybackSpeedPolicy.DEFAULT_SPEED) >= 0.001f
+        ) {
+            topSpeedView.text = OsdFormatter.formatSpeed(speed)
+            topSpeedView.visibility = View.VISIBLE
+        } else {
+            topSpeedView.visibility = View.GONE
+        }
         elapsedView.text = OsdFormatter.formatClock(pos)
         if (live) {
             // A live stream has no duration to fill a bar with; show the label
