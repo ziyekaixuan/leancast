@@ -322,7 +322,7 @@ class PlayerActivity : AppCompatActivity() {
                     session.stepPlaybackSpeed(faster = true)?.let { speed ->
                         showOsdBars(persistent = session.state != TransportState.PLAYING)
                         showCenterMessage(
-                            mainText = "▶▶  ${OsdFormatter.formatSpeed(speed)}",
+                            mainText = getString(R.string.osd_speed, OsdFormatter.formatSpeed(speed)),
                             subText = currentClockSummary(),
                             persistent = false,
                         )
@@ -373,7 +373,7 @@ class PlayerActivity : AppCompatActivity() {
             fastForwardActive = true
             showOsdBars(persistent = session.state != TransportState.PLAYING)
             showCenterMessage(
-                mainText = "▶▶  ${OsdFormatter.formatSpeed(2.0f)}",
+                mainText = getString(R.string.osd_speed, OsdFormatter.formatSpeed(2.0f)),
                 subText = currentClockSummary(),
                 persistent = false,
             )
@@ -399,7 +399,7 @@ class PlayerActivity : AppCompatActivity() {
             if (session.setPlaybackSpeed(speedBeforeFastForward)) {
                 showOsdBars(persistent = session.state != TransportState.PLAYING)
                 showCenterMessage(
-                    mainText = "▶▶  ${OsdFormatter.formatSpeed(speedBeforeFastForward)}",
+                    mainText = getString(R.string.osd_speed, OsdFormatter.formatSpeed(speedBeforeFastForward)),
                     subText = currentClockSummary(),
                     persistent = false,
                 )
@@ -410,7 +410,7 @@ class PlayerActivity : AppCompatActivity() {
                 session.stepPlaybackSpeed(faster = false)?.let { speed ->
                     showOsdBars(persistent = session.state != TransportState.PLAYING)
                     showCenterMessage(
-                        mainText = "▶▶  ${OsdFormatter.formatSpeed(speed)}",
+                        mainText = getString(R.string.osd_speed, OsdFormatter.formatSpeed(speed)),
                         subText = currentClockSummary(),
                         persistent = false,
                     )
