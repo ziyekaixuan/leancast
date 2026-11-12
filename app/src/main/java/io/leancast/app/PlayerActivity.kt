@@ -319,13 +319,15 @@ class PlayerActivity : AppCompatActivity() {
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
                 if ((event?.repeatCount ?: 0) == 0 && !session.isLive() && !session.isImage()) {
-                    session.stepPlaybackSpeed(faster = true)?.let { speed ->
+                    // Two-stage: a first press only brings up the progress
+                    // screen; speed steps happen while it is visible.
+                    if (!isOsdVisible()) {
                         showOsdBars(persistent = session.state != TransportState.PLAYING)
-                        showCenterMessage(
-                            mainText = getString(R.string.osd_speed, OsdFormatter.formatSpeed(speed)),
-                            subText = currentClockSummary(),
-                            persistent = false,
-                        )
+                    } else {
+                        session.stepPlaybackSpeed(faster = true)?.let { showSpeedPill(it) }
+                            // Already at the fastest step: still confirm the
+                            // current speed so the press is not a dead key.
+                            ?: showSpeedPill(session.playbackSpeed)
                     }
                 }
                 true
@@ -353,11 +355,13 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     /**
-     * D-pad up: a short tap steps the speed down one notch; holding it past
-     * the long-press timeout plays at 2x until release, then restores the
-     * speed from before the hold. A posted runnable (not key repeats) detects
-     * the hold, so remotes that send no repeats work too. Live streams keep
-     * the old behaviour (up just shows the OSD).
+     * D-pad up, two-stage: a short tap first brings up the progress screen,
+     * and only taps while it is visible step the speed down one notch;
+     * holding it past the long-press timeout plays at 2x until release (no
+     * OSD gate on the hold), then restores the speed from before the hold.
+     * A posted runnable (not key repeats) detects the hold, so remotes that
+     * send no repeats work too. Live streams and images keep the old
+     * behaviour (up just shows the OSD).
      */
     private var upDownAtMs = 0L
     private var upHeld = false
@@ -371,12 +375,7 @@ class PlayerActivity : AppCompatActivity() {
         speedBeforeFastForward = session.playbackSpeed
         if (session.setPlaybackSpeed(2.0f)) {
             fastForwardActive = true
-            showOsdBars(persistent = session.state != TransportState.PLAYING)
-            showCenterMessage(
-                mainText = getString(R.string.osd_speed, OsdFormatter.formatSpeed(2.0f)),
-                subText = currentClockSummary(),
-                persistent = false,
-            )
+            showSpeedPill(2.0f)
         }
     }
 
@@ -397,23 +396,21 @@ class PlayerActivity : AppCompatActivity() {
         if (fastForwardActive) {
             fastForwardActive = false
             if (session.setPlaybackSpeed(speedBeforeFastForward)) {
-                showOsdBars(persistent = session.state != TransportState.PLAYING)
-                showCenterMessage(
-                    mainText = getString(R.string.osd_speed, OsdFormatter.formatSpeed(speedBeforeFastForward)),
-                    subText = currentClockSummary(),
-                    persistent = false,
-                )
+                showSpeedPill(speedBeforeFastForward)
             }
         } else if (!session.isLive() && !session.isImage()) {
             val heldMs = (event?.eventTime ?: 0L) - upDownAtMs
             if (heldMs < ViewConfiguration.getLongPressTimeout()) {
-                session.stepPlaybackSpeed(faster = false)?.let { speed ->
+                // Two-stage, like DPAD_DOWN: a first tap only brings up the
+                // progress screen; speed steps happen while it is visible.
+                // The long-press 2x path above is exempt from the gate.
+                if (!isOsdVisible()) {
                     showOsdBars(persistent = session.state != TransportState.PLAYING)
-                    showCenterMessage(
-                        mainText = getString(R.string.osd_speed, OsdFormatter.formatSpeed(speed)),
-                        subText = currentClockSummary(),
-                        persistent = false,
-                    )
+                } else {
+                    session.stepPlaybackSpeed(faster = false)?.let { showSpeedPill(it) }
+                        // Already at the slowest step: still confirm the
+                        // current speed so the press is not a dead key.
+                        ?: showSpeedPill(session.playbackSpeed)
                 }
             }
         } else {
@@ -660,6 +657,19 @@ class PlayerActivity : AppCompatActivity() {
     private fun hideCenterPillNow() {
         ui.removeCallbacks(hideCenterPill)
         hideCenterPill.run()
+    }
+
+    /** True while the top/bottom OSD bars are on screen (they show/hide together). */
+    private fun isOsdVisible(): Boolean = topBar.visibility == View.VISIBLE
+
+    /** Shows the OSD bars plus the "Speed Nx" center pill for [speed]. */
+    private fun showSpeedPill(speed: Float) {
+        showOsdBars(persistent = CastBus.session?.state != TransportState.PLAYING)
+        showCenterMessage(
+            mainText = getString(R.string.osd_speed, OsdFormatter.formatSpeed(speed)),
+            subText = currentClockSummary(),
+            persistent = false,
+        )
     }
 
     private fun showCenterMessage(mainText: String, subText: String, persistent: Boolean) {
